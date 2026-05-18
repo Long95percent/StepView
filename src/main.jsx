@@ -8,6 +8,8 @@ import {
   deleteNode,
   deleteTask,
   formatCompactDate,
+  getCompletedTaskSummary,
+  getTaskProcessEntries,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
@@ -53,7 +55,8 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [dragState, setDragState] = React.useState(null);
   const [noteDraft, setNoteDraft] = React.useState(null);
-  const [completedOpen, setCompletedOpen] = React.useState(true);
+  const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
+  const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
   const [storageStatus, setStorageStatus] = React.useState("Loading local data...");
   const [isLoaded, setIsLoaded] = React.useState(false);
@@ -94,12 +97,23 @@ function App() {
 
   const activeTasks = board.tasks.filter((task) => task.status === "active");
   const completedTasks = board.tasks.filter((task) => task.status === "completed");
+  const selectedCompletedTask = completedTasks.find((task) => task.id === selectedCompletedTaskId);
+  const latestCompletedAt = completedTasks
+    .map((task) => task.completedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
 
   const updateTask = (taskId, updater) => {
     setBoard((current) => ({
       ...current,
       tasks: current.tasks.map((task) => (task.id === taskId ? updater(task) : task)),
     }));
+  };
+
+  const closeCompletedGallery = () => {
+    setCompletedGalleryOpen(false);
+    setSelectedCompletedTaskId(null);
   };
 
   const createGoal = (position = { x: 760 + activeTasks.length * 80, y: 360 + activeTasks.length * 80 }) => {
@@ -219,24 +233,16 @@ function App() {
 
         <section>
           <h2>Completed Board</h2>
-          <button className="ghost" onClick={() => setCompletedOpen((open) => !open)}>
-            {completedTasks.length} completed goals
-          </button>
-          {completedOpen && (
-            <div className="completedList">
-              {completedTasks.length === 0 && <p>No completed goals yet.</p>}
-              {completedTasks.map((task) => (
-                <article key={task.id}>
-                  <div>
-                    <strong>{task.title}</strong>
-                    <small>{formatCompactDate(task.completedAt)}</small>
-                  </div>
-                  <button onClick={() => setBoard((current) => restoreTask(current, task.id))}>Restore</button>
-                  <button onClick={() => setBoard((current) => deleteTask(current, task.id))}>Delete</button>
-                </article>
-              ))}
+          <div className="completedEntry">
+            <div>
+              <span>{emoji(0x1f3c6)}</span>
+              <strong>{completedTasks.length} completed goals</strong>
+              <small>{latestCompletedAt ? `Latest ${formatCompactDate(latestCompletedAt)}` : "No completed goals yet"}</small>
             </div>
-          )}
+            <button className="primary" type="button" onClick={() => setCompletedGalleryOpen(true)} disabled={completedTasks.length === 0}>
+              Open Gallery
+            </button>
+          </div>
         </section>
 
         <section>
@@ -358,6 +364,76 @@ function App() {
             <label>Timestamp<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
             <div className="modalActions"><button type="button" onClick={() => setNoteDraft(null)}>Cancel</button><button className="primary">Save milestone</button></div>
           </form>
+        </div>
+      )}
+
+      {completedGalleryOpen && (
+        <div className="galleryBackdrop" onPointerDown={closeCompletedGallery}>
+          <section className="completedGallery" onPointerDown={(event) => event.stopPropagation()}>
+            <header className="galleryHeader">
+              <div>
+                <span>{emoji(0x1f3c6)}</span>
+                <div>
+                  <h2>{selectedCompletedTask ? "Completed Journey" : "Completed Gallery"}</h2>
+                  <p>{selectedCompletedTask ? selectedCompletedTask.title : `${completedTasks.length} completed goals collected here.`}</p>
+                </div>
+              </div>
+              <button className="galleryClose" type="button" onClick={closeCompletedGallery}>Close</button>
+            </header>
+
+            {selectedCompletedTask ? (
+              <div className="journeyView">
+                <button className="ghost backButton" type="button" onClick={() => setSelectedCompletedTaskId(null)}>Back to cards</button>
+                <article className="journeyPanel">
+                  <div className="journeyHero">
+                    <span>{emoji(0x1f3c1)}</span>
+                    <div>
+                      <strong>{selectedCompletedTask.title}</strong>
+                      <small>Completed {formatCompactDate(selectedCompletedTask.completedAt)}</small>
+                    </div>
+                  </div>
+                  <div className="processTimeline journeyTimeline">
+                    {getTaskProcessEntries(selectedCompletedTask).map((entry) => (
+                      <div key={entry.id} className={`processStep ${entry.kind}`}>
+                        <span className="processDot">{entry.emoji}</span>
+                        <div>
+                          <small>{entry.label} · {formatCompactDate(entry.timestamp)}</small>
+                          <strong>{entry.title}</strong>
+                          <p>{entry.detail || "No details recorded."}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              </div>
+            ) : (
+              <div className="galleryGrid">
+                {completedTasks.map((task) => {
+                  const summary = getCompletedTaskSummary(task);
+                  return (
+                    <article key={task.id} className="completedCard galleryCard">
+                      <div className="completedCardHeader">
+                        <span className="completedBadge">{emoji(0x1f31f)}</span>
+                        <div>
+                          <strong>{task.title}</strong>
+                          <small>Completed {formatCompactDate(summary.completedAt)}</small>
+                        </div>
+                      </div>
+                      <div className="completedStats">
+                        <span>{summary.totalSteps} steps</span>
+                        <span>{summary.milestoneCount} milestones</span>
+                      </div>
+                      <div className="completedActions">
+                        <button type="button" onClick={() => setSelectedCompletedTaskId(task.id)}>Open Journey</button>
+                        <button type="button" onClick={() => setBoard((current) => restoreTask(current, task.id))}>Restore</button>
+                        <button type="button" onClick={() => setBoard((current) => deleteTask(current, task.id))}>Delete</button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </main>

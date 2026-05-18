@@ -119,6 +119,41 @@ export function completeTask(board, taskId, now = new Date()) {
   };
 }
 
+export function getTaskProcessEntries(task) {
+  const nodesById = new Map(task.nodes.map((node) => [node.id, node]));
+  const nextById = new Map(task.edges.map((edge) => [edge.from, edge.to]));
+  const start = task.nodes.find((node) => node.kind === "start") || task.nodes[0];
+  const entries = [];
+  const visited = new Set();
+  let current = start;
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    entries.push({
+      id: current.id,
+      kind: current.kind,
+      label: current.kind === "start" ? "Start" : current.kind === "finish" ? "Finish" : "Milestone",
+      emoji: current.emoji,
+      title: current.title,
+      detail: current.detail,
+      timestamp: current.timestamp,
+    });
+    current = nodesById.get(nextById.get(current.id));
+  }
+
+  return entries;
+}
+
+export function getCompletedTaskSummary(task) {
+  const processEntries = getTaskProcessEntries(task);
+  return {
+    totalSteps: processEntries.length,
+    milestoneCount: processEntries.filter((entry) => entry.kind === "milestone").length,
+    startedAt: processEntries[0]?.timestamp || task.createdAt,
+    completedAt: task.completedAt,
+  };
+}
+
 export function restoreTask(board, taskId) {
   return {
     ...board,

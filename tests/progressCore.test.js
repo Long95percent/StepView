@@ -6,6 +6,8 @@ import {
   createEmojiSticker,
   deleteTask,
   formatCompactDate,
+  getCompletedTaskSummary,
+  getTaskProcessEntries,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
@@ -59,6 +61,40 @@ describe("progress board core", () => {
     expect(completed.tasks[0].completedAt).toBe("2026-05-20T08:00:00.000Z");
     expect(restored.tasks[0].status).toBe("active");
     expect(restored.tasks[0].completedAt).toBeUndefined();
+  });
+
+  it("summarizes completed tasks for readable process cards", () => {
+    const task = buildTask("上线用户可见卡片", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const withMilestone = addMilestoneAfter(task, task.nodes[0].id, {
+      title: "整理完整过程",
+      detail: "把开始、里程碑和终点串成用户能读懂的时间线",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const completed = completeTask({ tasks: [withMilestone], stickers: [] }, task.id, new Date("2026-05-20T08:00:00Z"));
+
+    expect(getCompletedTaskSummary(completed.tasks[0])).toEqual({
+      totalSteps: 3,
+      milestoneCount: 1,
+      startedAt: "2026-05-18T09:30:00.000Z",
+      completedAt: "2026-05-20T08:00:00.000Z",
+    });
+  });
+
+  it("orders task process entries by the connected path", () => {
+    const task = buildTask("展示完整路径", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const withFirst = addMilestoneAfter(task, task.nodes[0].id, {
+      title: "第一步",
+      detail: "先完成基础能力",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const withSecond = addMilestoneAfter(withFirst, withFirst.nodes[1].id, {
+      title: "第二步",
+      detail: "再优化视觉呈现",
+      timestamp: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(getTaskProcessEntries(withSecond).map((entry) => entry.title)).toEqual(["Start", "第一步", "第二步", "展示完整路径"]);
+    expect(getTaskProcessEntries(withSecond).map((entry) => entry.label)).toEqual(["Start", "Milestone", "Milestone", "Finish"]);
   });
 
   it("deletes a task and normalizes stored board data", () => {

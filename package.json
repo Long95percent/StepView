@@ -1,0 +1,26 @@
+{
+    "type":  "module",
+    "scripts":  {
+                    "dev":  "vite --host 0.0.0.0",
+                    "build":  "vite build",
+                    "preview":  "vite preview --host 0.0.0.0",
+                    "test":  "vitest run --pool=threads",
+                    "desktop":  "npm-run-all -p dev electron:wait",
+                    "electron:wait":  "wait-on http://localhost:5173 \u0026\u0026 cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron electron/main.js",
+                    "desktop:prod":  "npm run build \u0026\u0026 electron electron/main.js"
+                },
+    "dependencies":  {
+                         "@vitejs/plugin-react":  "latest",
+                         "vite":  "latest",
+                         "react":  "latest",
+                         "react-dom":  "latest",
+                         "vitest":  "latest",
+                         "electron":  "latest",
+                         "npm-run-all":  "latest",
+                         "wait-on":  "latest",
+                         "cross-env":  "latest"
+                     },
+    "devDependencies":  {
+
+                        }
+}

@@ -1,0 +1,5 @@
+- Always read and write files as UTF-8
+- Never convert file encodings
+- Do not rewrite entire files unless necessary
+- If encoding errors appear, stop and ask for confirmation
+- Preserve existing line endings

@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.cjs
+
+# Build outputs
+dist/
+dist-*/
+build/
+release/
+out/
+
+# Vite / frontend cache
+.vite/
+.cache/
+
+# Electron / packaging artifacts
+*.asar
+*.blockmap
+*.snap
+*.AppImage
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.exe
+*.msi
+*.msix
+
+# Local runtime data
+stepview-board.json
+*.local
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# TypeScript incremental cache
+*.tsbuildinfo

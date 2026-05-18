@@ -61,3 +61,30 @@
 - [ ] Add `Open Journey` per card to switch into a dedicated process timeline view.
 - [ ] Add `Back to cards` and `Close` controls.
 - [ ] Style overlay, cards, and scrollbars with soft glassmorphism.
+
+---
+
+## Revision: UI Copy Cleanup and Playful Polish
+
+**Goal:** Make the frontend cleaner, less text-heavy, and more playful with clearer typography and emoji cues.
+
+**Architecture:** Keep existing React state and data helpers. Change only UI copy, component class usage where needed, and CSS visual hierarchy. Avoid changing persistence or task behavior.
+
+### Task 5: Copy Cleanup
+
+**Files:**
+- Modify: `src/main.jsx`
+
+- [ ] Shorten sidebar brand, buttons, section titles, empty state, gallery labels, and modal labels.
+- [ ] Remove helper paragraphs and footer copy that make the UI feel cluttered.
+- [ ] Add emoji cues to major actions and sections.
+
+### Task 6: Typography and Visual Polish
+
+**Files:**
+- Modify: `src/styles.css`
+
+- [ ] Tune font sizes for brand, sections, buttons, cards, and journey view.
+- [ ] Reduce section padding and nested-box heaviness.
+- [ ] Make secondary actions quieter and primary actions brighter.
+- [ ] Keep scrollbars subtle and avoid harsh tracks.

@@ -16,6 +16,10 @@ export function normalizeBoard(value) {
   };
 }
 
+export function hasBoardContent(board) {
+  return board.tasks.length > 0 || board.stickers.length > 0;
+}
+
 export function buildTask(title, finishPosition, now = new Date()) {
   const taskId = makeId("task");
   const startId = makeId("node");

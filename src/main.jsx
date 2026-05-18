@@ -10,6 +10,7 @@ import {
   formatCompactDate,
   getCompletedTaskSummary,
   getTaskProcessEntries,
+  hasBoardContent,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
@@ -58,7 +59,6 @@ function App() {
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
-  const [storageStatus, setStorageStatus] = React.useState("Loading local data...");
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
 
@@ -66,16 +66,16 @@ function App() {
     let cancelled = false;
     async function load() {
       if (desktopApi) {
-        const saved = await desktopApi.loadBoard();
+        let saved = normalizeBoard(await desktopApi.loadBoard());
+        const legacyBrowserBoard = loadBrowserBoard();
+        if (!hasBoardContent(saved) && hasBoardContent(legacyBrowserBoard)) saved = legacyBrowserBoard;
         if (!cancelled) {
-          setBoard(normalizeBoard(saved));
-          setStorageStatus("Desktop local file storage connected");
+          setBoard(saved);
           setIsLoaded(true);
         }
         return;
       }
       setBoard(loadBrowserBoard());
-      setStorageStatus("Browser preview: saved to localStorage");
       setIsLoaded(true);
     }
     load();
@@ -87,9 +87,7 @@ function App() {
   React.useEffect(() => {
     if (!isLoaded) return;
     if (desktopApi) {
-      desktopApi.saveBoard(board).then((result) => {
-        if (result?.path) setStorageStatus(`Saved: ${result.path}`);
-      });
+      desktopApi.saveBoard(board);
       return;
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
@@ -203,25 +201,22 @@ function App() {
         <div className="brand">
           <span>{emoji(0x1fa90)}</span>
           <div>
-            <strong>StepView</strong>
-            <small>Infinite goal progress canvas</small>
+            <strong>StepView ✨</strong>
           </div>
         </div>
 
         <form className="quickCreate" onSubmit={(event) => { event.preventDefault(); createGoal(); }}>
           <label>
-            Goal name
-            <input value={quickGoal} onChange={(event) => setQuickGoal(event.target.value)} placeholder="Type the final goal" />
+            🎯 Goal
+            <input value={quickGoal} onChange={(event) => setQuickGoal(event.target.value)} placeholder="What are we finishing?" />
           </label>
-          <button className="primary" type="submit">Create at auto spot {emoji(0x1f3c1)}</button>
-          <p className="createHint">Or right-click the canvas and choose Create goal here.</p>
-          <button className="ghost" type="button" onClick={loadDemoBoard}>Load demo board</button>
-          <button className="ghost" type="button" onClick={() => setViewport({ x: window.innerWidth / 2 - 400, y: window.innerHeight / 2 - 260, scale: 1 })}>Focus canvas</button>
+          <button className="primary" type="submit">Create 🏁</button>
+          <button className="ghost" type="button" onClick={loadDemoBoard}>Demo ✨</button>
+          <button className="ghost" type="button" onClick={() => setViewport({ x: window.innerWidth / 2 - 400, y: window.innerHeight / 2 - 260, scale: 1 })}>Focus 🔍</button>
         </form>
 
         <section>
-          <h2>Emoji Library</h2>
-          <p>Drag any emoji to the canvas. Double-click a sticker to delete it.</p>
+          <h2>🧩 Stickers</h2>
           <div className="emojiGrid">
             {EMOJI_LIBRARY.map((item, index) => (
               <button key={`${item}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData("text/emoji", item)}>
@@ -232,26 +227,25 @@ function App() {
         </section>
 
         <section>
-          <h2>Completed Board</h2>
+          <h2>🏆 Wins</h2>
           <div className="completedEntry">
             <div>
               <span>{emoji(0x1f3c6)}</span>
-              <strong>{completedTasks.length} completed goals</strong>
-              <small>{latestCompletedAt ? `Latest ${formatCompactDate(latestCompletedAt)}` : "No completed goals yet"}</small>
+              <strong>{completedTasks.length} wins</strong>
+              <small>{latestCompletedAt ? formatCompactDate(latestCompletedAt) : "Nothing yet"}</small>
             </div>
             <button className="primary" type="button" onClick={() => setCompletedGalleryOpen(true)} disabled={completedTasks.length === 0}>
-              Open Gallery
+              Gallery 🌟
             </button>
           </div>
         </section>
 
         <section>
-          <h2>Data</h2>
-          <p>{storageStatus}</p>
-          {desktopApi && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Reveal data file</button>}
-          <button className="danger wide" onClick={clearBoard}>Clear board</button>
+          <h2>💾 Save</h2>
+          <p className="storagePill">{desktopApi ? "Local file ✅" : "Browser ✅"}</p>
+          {desktopApi && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
+          <button className="danger wide" onClick={clearBoard}>Clear 🧹</button>
         </section>
-        <footer>One panel, one name. Right-click only controls placement.</footer>
       </aside>
 
       <section
@@ -274,10 +268,9 @@ function App() {
       >
         {activeTasks.length === 0 && board.stickers.length === 0 && (
           <div className="emptyState">
-            <span>{emoji(0x1f3c1)}</span>
-            <h1>Start with one named goal</h1>
-            <p>Type the final goal on the left. Use auto placement, or right-click the canvas to place it exactly.</p>
-            <button className="primary" onClick={() => createGoal()}>Create first goal</button>
+            <span>{emoji(0x1f680)}</span>
+            <h1>Create your first goal</h1>
+            <button className="primary" onClick={() => createGoal()}>Launch 🚀</button>
           </div>
         )}
 
@@ -318,16 +311,16 @@ function App() {
                   {selectedNodeId === node.id && node.kind === "finish" && (
                     <div className="nodeActions">
                       <button className="done" onClick={(event) => { event.stopPropagation(); setBoard((current) => completeTask(current, task.id, new Date())); }}>
-                        Mark complete
+                        Done ✅
                       </button>
                       <button className="danger" onClick={(event) => { event.stopPropagation(); setBoard((current) => deleteTask(current, task.id)); }}>
-                        Delete task
+                        Delete 🗑️
                       </button>
                     </div>
                   )}
                   {selectedNodeId === node.id && node.kind === "milestone" && (
                     <button className="danger" onClick={(event) => { event.stopPropagation(); updateTask(task.id, (currentTask) => deleteNode(currentTask, node.id)); }}>
-                      Delete node
+                      Delete 🗑️
                     </button>
                   )}
                 </article>
@@ -358,11 +351,11 @@ function App() {
       {noteDraft && (
         <div className="modalBackdrop" onPointerDown={() => setNoteDraft(null)}>
           <form className="modal" onSubmit={saveMilestone} onPointerDown={(event) => event.stopPropagation()}>
-            <h2>Add milestone</h2>
-            <label>Milestone name<input autoFocus required value={noteDraft.title} onChange={(event) => setNoteDraft({ ...noteDraft, title: event.target.value })} /></label>
-            <label>Details<textarea value={noteDraft.detail} onChange={(event) => setNoteDraft({ ...noteDraft, detail: event.target.value })} /></label>
-            <label>Timestamp<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
-            <div className="modalActions"><button type="button" onClick={() => setNoteDraft(null)}>Cancel</button><button className="primary">Save milestone</button></div>
+            <h2>📍 Milestone</h2>
+            <label>Name<input autoFocus required value={noteDraft.title} onChange={(event) => setNoteDraft({ ...noteDraft, title: event.target.value })} /></label>
+            <label>Note<textarea value={noteDraft.detail} onChange={(event) => setNoteDraft({ ...noteDraft, detail: event.target.value })} /></label>
+            <label>Time<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
+            <div className="modalActions"><button type="button" onClick={() => setNoteDraft(null)}>Cancel</button><button className="primary">Save ✅</button></div>
           </form>
         </div>
       )}
@@ -374,22 +367,22 @@ function App() {
               <div>
                 <span>{emoji(0x1f3c6)}</span>
                 <div>
-                  <h2>{selectedCompletedTask ? "Completed Journey" : "Completed Gallery"}</h2>
-                  <p>{selectedCompletedTask ? selectedCompletedTask.title : `${completedTasks.length} completed goals collected here.`}</p>
+                  <h2>{selectedCompletedTask ? "Journey 🗺️" : "Gallery 🌟"}</h2>
+                  <p>{selectedCompletedTask ? selectedCompletedTask.title : `${completedTasks.length} wins`}</p>
                 </div>
               </div>
-              <button className="galleryClose" type="button" onClick={closeCompletedGallery}>Close</button>
+              <button className="galleryClose" type="button" onClick={closeCompletedGallery}>Close ✕</button>
             </header>
 
             {selectedCompletedTask ? (
               <div className="journeyView">
-                <button className="ghost backButton" type="button" onClick={() => setSelectedCompletedTaskId(null)}>Back to cards</button>
+                <button className="ghost backButton" type="button" onClick={() => setSelectedCompletedTaskId(null)}>← Cards</button>
                 <article className="journeyPanel">
                   <div className="journeyHero">
                     <span>{emoji(0x1f3c1)}</span>
                     <div>
                       <strong>{selectedCompletedTask.title}</strong>
-                      <small>Completed {formatCompactDate(selectedCompletedTask.completedAt)}</small>
+                      <small>✅ {formatCompactDate(selectedCompletedTask.completedAt)}</small>
                     </div>
                   </div>
                   <div className="processTimeline journeyTimeline">
@@ -399,7 +392,7 @@ function App() {
                         <div>
                           <small>{entry.label} · {formatCompactDate(entry.timestamp)}</small>
                           <strong>{entry.title}</strong>
-                          <p>{entry.detail || "No details recorded."}</p>
+                          <p>{entry.detail || "No note."}</p>
                         </div>
                       </div>
                     ))}
@@ -416,7 +409,7 @@ function App() {
                         <span className="completedBadge">{emoji(0x1f31f)}</span>
                         <div>
                           <strong>{task.title}</strong>
-                          <small>Completed {formatCompactDate(summary.completedAt)}</small>
+                          <small>✅ {formatCompactDate(summary.completedAt)}</small>
                         </div>
                       </div>
                       <div className="completedStats">
@@ -424,9 +417,9 @@ function App() {
                         <span>{summary.milestoneCount} milestones</span>
                       </div>
                       <div className="completedActions">
-                        <button type="button" onClick={() => setSelectedCompletedTaskId(task.id)}>Open Journey</button>
-                        <button type="button" onClick={() => setBoard((current) => restoreTask(current, task.id))}>Restore</button>
-                        <button type="button" onClick={() => setBoard((current) => deleteTask(current, task.id))}>Delete</button>
+                        <button type="button" onClick={() => setSelectedCompletedTaskId(task.id)}>Journey 🗺️</button>
+                        <button type="button" onClick={() => setBoard((current) => restoreTask(current, task.id))}>↩</button>
+                        <button type="button" onClick={() => setBoard((current) => deleteTask(current, task.id))}>🗑️</button>
                       </div>
                     </article>
                   );

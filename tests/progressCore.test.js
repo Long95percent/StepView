@@ -8,6 +8,7 @@ import {
   formatCompactDate,
   getCompletedTaskSummary,
   getTaskProcessEntries,
+  hasBoardContent,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
@@ -104,6 +105,14 @@ describe("progress board core", () => {
 
     expect(board.stickers).toEqual([]);
     expect(deleted.tasks).toEqual([]);
+  });
+
+  it("detects whether a stored board has recoverable user content", () => {
+    const task = buildTask("旧数据", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+
+    expect(hasBoardContent({ tasks: [], stickers: [] })).toBe(false);
+    expect(hasBoardContent({ tasks: [task], stickers: [] })).toBe(true);
+    expect(hasBoardContent({ tasks: [], stickers: [createEmojiSticker("✨", { x: 1, y: 2 })] })).toBe(true);
   });
 
   it("formats compact labels as year and date", () => {

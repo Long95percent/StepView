@@ -3,14 +3,17 @@ import { createRoot } from "react-dom/client";
 import {
   addMilestoneAfter,
   addPlanMilestoneAfter,
+  addCrossTaskLink,
   buildTask,
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
+  deleteCrossTaskLink,
   deleteNode,
   deleteTask,
   formatCompactDate,
   getCompletedTaskSummary,
+  getCrossTaskLinkSegments,
   getTaskProcessEntries,
   hasBoardContent,
   moveCanvasItem,
@@ -45,20 +48,28 @@ function loadBrowserBoard() {
   }
 }
 
-function screenToWorld(event, viewport) {
+function screenToWorld(event, viewport, canvasElement) {
+  const rect = canvasElement?.getBoundingClientRect() || { left: 0, top: 0 };
   return {
-    x: (event.clientX - viewport.x) / viewport.scale,
-    y: (event.clientY - viewport.y) / viewport.scale,
+    x: (event.clientX - rect.left - viewport.x) / viewport.scale,
+    y: (event.clientY - rect.top - viewport.y) / viewport.scale,
   };
+}
+
+function isCanvasPanTarget(target) {
+  return target instanceof Element && !target.closest(".node, .sticker, .contextMenu, .modalBackdrop, .galleryBackdrop, .linkHandle, .crossTaskEdgeHit");
 }
 
 function App() {
   const [board, setBoard] = React.useState(INITIAL_BOARD);
   const [viewport, setViewport] = React.useState({ x: 0, y: 0, scale: 1 });
   const [menu, setMenu] = React.useState(null);
+  const [selectedLinkId, setSelectedLinkId] = React.useState(null);
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [dragState, setDragState] = React.useState(null);
   const [noteDraft, setNoteDraft] = React.useState(null);
+  const [linkDrag, setLinkDrag] = React.useState(null);
+  const [toast, setToast] = React.useState(null);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
@@ -163,6 +174,41 @@ function App() {
     if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) setBoard(INITIAL_BOARD);
   };
 
+  const showToast = (message) => {
+    setToast(message);
+    window.setTimeout(() => setToast(null), 1700);
+  };
+
+  const cancelLinkDrag = () => {
+    if (!linkDrag) return;
+    setLinkDrag(null);
+  };
+
+  React.useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        cancelLinkDrag();
+        setSelectedLinkId(null);
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedLinkId) {
+        setBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
+        setSelectedLinkId(null);
+        showToast("Link deleted.");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [linkDrag, selectedLinkId]);
+
+  React.useEffect(() => {
+    if (!linkDrag) return undefined;
+    const onPointerMove = (event) => {
+      setLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    return () => window.removeEventListener("pointermove", onPointerMove);
+  }, [linkDrag, viewport]);
+
   const celebrateAt = (position) => {
     const burst = createConfettiBurst(position);
     setConfetti(burst);
@@ -179,9 +225,26 @@ function App() {
     if (node.status !== "completed") celebrateAt({ x: node.x, y: node.y });
   };
 
+  const startLinkDrag = (event, task, node) => {
+    event.stopPropagation();
+    setLinkDrag({ taskId: task.id, nodeId: node.id, title: node.title, from: { x: node.x, y: node.y }, to: { x: node.x, y: node.y } });
+  };
+
+  const finishLinkDrag = (targetNode) => {
+    if (!linkDrag || linkDrag.nodeId === targetNode.id) return false;
+    try {
+      setBoard(addCrossTaskLink(board, linkDrag.nodeId, targetNode.id, new Date()));
+      showToast("Link created.");
+    } catch (error) {
+      showToast(error.message);
+    }
+    setLinkDrag(null);
+    return true;
+  };
+
   const startPointerDrag = (event, type, id) => {
     event.stopPropagation();
-    const world = screenToWorld(event, viewport);
+    const world = screenToWorld(event, viewport, canvasRef.current);
     let origin = null;
     for (const task of board.tasks) {
       origin = task.nodes.find((node) => node.id === id);
@@ -193,12 +256,16 @@ function App() {
   };
 
   const onPointerMove = (event) => {
+    if (linkDrag) {
+      setLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
+      return;
+    }
     if (!dragState) return;
     if (dragState.type === "pan") {
       setViewport((current) => ({ ...current, x: event.clientX - dragState.startX, y: event.clientY - dragState.startY }));
       return;
     }
-    const world = screenToWorld(event, viewport);
+    const world = screenToWorld(event, viewport, canvasRef.current);
     setBoard((current) => moveCanvasItem(current, dragState.id, { x: world.x - dragState.offsetX, y: world.y - dragState.offsetY }));
   };
 
@@ -212,7 +279,7 @@ function App() {
     event.preventDefault();
     const droppedEmoji = event.dataTransfer.getData("text/emoji");
     if (!droppedEmoji) return;
-    const position = screenToWorld(event, viewport);
+    const position = screenToWorld(event, viewport, canvasRef.current);
     setBoard((current) => ({ ...current, stickers: [...current.stickers, createEmojiSticker(droppedEmoji, position)] }));
   };
 
@@ -274,15 +341,24 @@ function App() {
         className="canvas"
         onContextMenu={(event) => {
           event.preventDefault();
-          setMenu({ x: event.clientX, y: event.clientY, world: screenToWorld(event, viewport) });
+          setMenu({ x: event.clientX, y: event.clientY, world: screenToWorld(event, viewport, canvasRef.current) });
         }}
         onPointerDown={(event) => {
-          if (event.target === canvasRef.current) setDragState({ type: "pan", startX: event.clientX - viewport.x, startY: event.clientY - viewport.y });
+          if (event.button !== 0) return;
+          if (isCanvasPanTarget(event.target)) {
+            if (linkDrag) cancelLinkDrag();
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            setDragState({ type: "pan", startX: event.clientX - viewport.x, startY: event.clientY - viewport.y });
+          }
           setMenu(null);
+          if (isCanvasPanTarget(event.target)) setSelectedLinkId(null);
         }}
         onPointerMove={onPointerMove}
-        onPointerUp={() => setDragState(null)}
-        onPointerLeave={() => setDragState(null)}
+        onPointerUp={(event) => {
+          setDragState(null);
+          if (isCanvasPanTarget(event.target)) cancelLinkDrag();
+        }}
+        onPointerLeave={() => { setDragState(null); cancelLinkDrag(); }}
         onWheel={onWheel}
         onDrop={dropEmoji}
         onDragOver={(event) => event.preventDefault()}
@@ -297,6 +373,11 @@ function App() {
 
         <div className="grid" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}>
           <svg className="edges">
+            <defs>
+              <marker id="crossTaskArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" />
+              </marker>
+            </defs>
             {activeTasks.flatMap((task) =>
               task.edges.map((edge) => {
                 const from = task.nodes.find((node) => node.id === edge.from);
@@ -305,6 +386,13 @@ function App() {
                 return <line key={edge.id} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />;
               }),
             )}
+            {getCrossTaskLinkSegments(board).map((link) => (
+              <g key={link.id}>
+                <line className="crossTaskEdgeHit" x1={link.x1} y1={link.y1} x2={link.x2} y2={link.y2} onPointerDown={(event) => { event.stopPropagation(); setMenu(null); setSelectedLinkId(link.id); }} />
+                <line className={`crossTaskEdge ${selectedLinkId === link.id ? "selected" : ""}`} x1={link.x1} y1={link.y1} x2={link.x2} y2={link.y2} markerEnd="url(#crossTaskArrow)" />
+              </g>
+            ))}
+            {linkDrag && <line className="linkPreviewEdge" x1={linkDrag.from.x} y1={linkDrag.from.y} x2={linkDrag.to.x} y2={linkDrag.to.y} />}
           </svg>
 
           {activeTasks.map((task) => (
@@ -312,14 +400,24 @@ function App() {
               {task.nodes.map((node) => (
                 <article
                   key={node.id}
-                  className={`node ${node.kind} ${node.status === "completed" ? "completed" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
+                  className={`node ${node.kind} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
                   style={{ left: node.x, top: node.y }}
                   onPointerDown={(event) => startPointerDrag(event, "node", node.id)}
                   onClick={(event) => {
                     event.stopPropagation();
                     setSelectedNodeId((id) => (id === node.id ? null : node.id));
                   }}
+                  onPointerUp={(event) => {
+                    if (!linkDrag) return;
+                    event.stopPropagation();
+                    finishLinkDrag(node);
+                  }}
                 >
+                  <div className="linkHandles" aria-hidden="true">
+                    {['top', 'right', 'bottom', 'left'].map((side) => (
+                      <button key={side} type="button" className={`linkHandle ${side}`} onPointerDown={(event) => startLinkDrag(event, task, node)} onClick={(event) => event.stopPropagation()} />
+                    ))}
+                  </div>
                   <div className="nodeTop">
                     <span className="nodeEmoji">{node.emoji}</span>
                     {node.kind !== "finish" && (
@@ -390,11 +488,13 @@ function App() {
           ))}
         </div>
 
+        {toast && <div className="toast">{toast}</div>}
         {menu && (
           <div className="contextMenu" style={{ left: menu.x, top: menu.y }}>
             <button onClick={() => createGoal(menu.world)}>Create goal here {emoji(0x1f3c1)}</button>
           </div>
         )}
+
       </section>
 
       {noteDraft && (
@@ -434,16 +534,16 @@ function App() {
                       <small>✅ {formatCompactDate(selectedCompletedTask.completedAt)}</small>
                     </div>
                     <div className="journeySummary">
-                      <span>{getCompletedTaskSummary(selectedCompletedTask).totalSteps} steps</span>
-                      <span>{getCompletedTaskSummary(selectedCompletedTask).milestoneCount} milestones</span>
+                      <span>{getCompletedTaskSummary(board, selectedCompletedTask).totalSteps} steps</span>
+                      <span>{getCompletedTaskSummary(board, selectedCompletedTask).milestoneCount} milestones</span>
                     </div>
                   </div>
                   <div className="processTimeline journeyTimeline">
-                    {getTaskProcessEntries(selectedCompletedTask).map((entry) => (
+                    {getTaskProcessEntries(board, selectedCompletedTask).map((entry) => (
                       <div key={entry.id} className={`processStep ${entry.kind} ${entry.status === "completed" ? "completed" : ""}`}>
                         <span className="processDot">{entry.emoji}</span>
                         <div>
-                          <small>{entry.label}{entry.kind === "plan-milestone" ? ` · ${entry.status === "completed" ? "Completed" : "Planned"}` : ""} · {formatCompactDate(entry.timestamp)}</small>
+                          <small>{entry.label}{entry.taskId !== selectedCompletedTask.id ? ` · ${entry.taskTitle}` : ""}{entry.kind === "plan-milestone" ? ` · ${entry.status === "completed" ? "Completed" : "Planned"}` : ""} · {formatCompactDate(entry.timestamp)}</small>
                           <strong>{entry.title}</strong>
                           <p>{entry.detail || "No note."}</p>
                         </div>
@@ -455,7 +555,7 @@ function App() {
             ) : (
               <div className="galleryGrid">
                 {completedTasks.map((task) => {
-                  const summary = getCompletedTaskSummary(task);
+                  const summary = getCompletedTaskSummary(board, task);
                   return (
                     <article key={task.id} className="completedCard galleryCard">
                       <div className="completedCardHeader">

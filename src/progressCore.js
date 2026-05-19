@@ -14,11 +14,114 @@ export function normalizeBoard(value) {
   return {
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
+    links: Array.isArray(value?.links) ? value.links : [],
   };
 }
 
 export function hasBoardContent(board) {
   return board.tasks.length > 0 || board.stickers.length > 0;
+}
+
+export function findNodeInBoard(board, nodeId) {
+  for (const task of board.tasks) {
+    const node = task.nodes.find((candidate) => candidate.id === nodeId);
+    if (node) return { ...node, taskTitle: task.title };
+  }
+  return null;
+}
+
+export function getUnifiedEdges(board) {
+  const internalEdges = board.tasks.flatMap((task) =>
+    task.edges.map((edge) => ({
+      id: edge.id,
+      fromTaskId: task.id,
+      fromNodeId: edge.from,
+      toTaskId: task.id,
+      toNodeId: edge.to,
+      kind: "internal",
+    })),
+  );
+  const crossTaskEdges = (board.links || []).map((link) => ({
+    id: link.id,
+    fromTaskId: link.fromTaskId,
+    fromNodeId: link.fromNodeId,
+    toTaskId: link.toTaskId,
+    toNodeId: link.toNodeId,
+    kind: link.kind,
+  }));
+  return [...internalEdges, ...crossTaskEdges];
+}
+
+export function nodeHasOutgoingNext(board, nodeId) {
+  return getUnifiedEdges(board).some((edge) => edge.fromNodeId === nodeId);
+}
+
+export function wouldCreateCycle(board, fromNodeId, toNodeId) {
+  if (fromNodeId === toNodeId) return true;
+  const nextById = new Map();
+  for (const edge of [...getUnifiedEdges(board), { fromNodeId, toNodeId }]) {
+    if (!nextById.has(edge.fromNodeId)) nextById.set(edge.fromNodeId, []);
+    nextById.get(edge.fromNodeId).push(edge.toNodeId);
+  }
+  const visited = new Set();
+  const stack = [toNodeId];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === fromNodeId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    stack.push(...(nextById.get(current) || []));
+  }
+
+  return false;
+}
+
+export function addCrossTaskLink(board, fromNodeId, toNodeId, now = new Date()) {
+  const fromNode = findNodeInBoard(board, fromNodeId);
+  const toNode = findNodeInBoard(board, toNodeId);
+  if (!fromNode || !toNode) throw new Error("Node not found.");
+  if (fromNode.taskId === toNode.taskId) throw new Error("Cross-task links only for now.");
+  if (wouldCreateCycle(board, fromNodeId, toNodeId)) throw new Error("This link would create a loop.");
+
+  return {
+    ...board,
+    links: [
+      ...(board.links || []),
+      {
+        id: makeId("link"),
+        fromTaskId: fromNode.taskId,
+        fromNodeId,
+        toTaskId: toNode.taskId,
+        toNodeId,
+        kind: "cross-task",
+        createdAt: now.toISOString(),
+      },
+    ],
+  };
+}
+
+export function deleteCrossTaskLink(board, linkId) {
+  return { ...board, links: (board.links || []).filter((link) => link.id !== linkId) };
+}
+
+export function getCrossTaskLinkSegments(board) {
+  return (board.links || []).flatMap((link) => {
+    const fromNode = findNodeInBoard(board, link.fromNodeId);
+    const toNode = findNodeInBoard(board, link.toNodeId);
+    if (!fromNode || !toNode) return [];
+    return [
+      {
+        id: link.id,
+        fromTaskId: link.fromTaskId,
+        toTaskId: link.toTaskId,
+        x1: fromNode.x,
+        y1: fromNode.y,
+        x2: toNode.x,
+        y2: toNode.y,
+      },
+    ];
+  });
 }
 
 export function buildTask(title, finishPosition, now = new Date()) {
@@ -177,7 +280,25 @@ export function completeTask(board, taskId, now = new Date()) {
   };
 }
 
-export function getTaskProcessEntries(task) {
+function toProcessEntry(node, taskTitle) {
+  return {
+    id: node.id,
+    taskId: node.taskId,
+    taskTitle,
+    kind: node.kind,
+    label: node.kind === "start" ? "Start" : node.kind === "finish" ? "Finish" : node.kind === "plan-milestone" ? "Plan" : "Milestone",
+    emoji: node.emoji,
+    title: node.title,
+    detail: node.detail,
+    timestamp: node.timestamp,
+    status: node.status,
+  };
+}
+
+export function getTaskProcessEntries(boardOrTask, maybeTask) {
+  if (maybeTask) return getBoardTaskProcessEntries(boardOrTask, maybeTask);
+
+  const task = boardOrTask;
   const nodesById = new Map(task.nodes.map((node) => [node.id, node]));
   const nextById = new Map(task.edges.map((edge) => [edge.from, edge.to]));
   const start = task.nodes.find((node) => node.kind === "start") || task.nodes[0];
@@ -187,24 +308,35 @@ export function getTaskProcessEntries(task) {
 
   while (current && !visited.has(current.id)) {
     visited.add(current.id);
-    entries.push({
-      id: current.id,
-      kind: current.kind,
-      label: current.kind === "start" ? "Start" : current.kind === "finish" ? "Finish" : current.kind === "plan-milestone" ? "Plan" : "Milestone",
-      emoji: current.emoji,
-      title: current.title,
-      detail: current.detail,
-      timestamp: current.timestamp,
-      status: current.status,
-    });
+    entries.push(toProcessEntry(current, task.title));
     current = nodesById.get(nextById.get(current.id));
   }
 
   return entries;
 }
 
-export function getCompletedTaskSummary(task) {
-  const processEntries = getTaskProcessEntries(task);
+function getBoardTaskProcessEntries(board, task) {
+  const internalNextById = new Map(board.tasks.flatMap((candidate) => candidate.edges.map((edge) => [edge.from, edge.to])));
+  const crossTaskNextById = new Map((board.links || []).map((link) => [link.fromNodeId, link.toNodeId]));
+  const start = task.nodes.find((node) => node.kind === "start") || task.nodes[0];
+  const entries = [];
+  const visited = new Set();
+  let current = start;
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    const nodeWithTask = findNodeInBoard(board, current.id);
+    if (!nodeWithTask) break;
+    entries.push(toProcessEntry(nodeWithTask, nodeWithTask.taskTitle));
+    current = findNodeInBoard(board, internalNextById.get(current.id) || crossTaskNextById.get(current.id));
+  }
+
+  return entries;
+}
+
+export function getCompletedTaskSummary(boardOrTask, maybeTask) {
+  const task = maybeTask || boardOrTask;
+  const processEntries = maybeTask ? getTaskProcessEntries(boardOrTask, maybeTask) : getTaskProcessEntries(task);
   return {
     totalSteps: processEntries.length,
     milestoneCount: processEntries.filter((entry) => entry.kind === "milestone" || entry.kind === "plan-milestone").length,
@@ -225,7 +357,11 @@ export function restoreTask(board, taskId) {
 }
 
 export function deleteTask(board, taskId) {
-  return { ...board, tasks: board.tasks.filter((task) => task.id !== taskId) };
+  return {
+    ...board,
+    tasks: board.tasks.filter((task) => task.id !== taskId),
+    links: (board.links || []).filter((link) => link.fromTaskId !== taskId && link.toTaskId !== taskId),
+  };
 }
 
 export function formatCompactDate(value) {

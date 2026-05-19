@@ -1,20 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCrossTaskLink,
   addMilestoneAfter,
   addPlanMilestoneAfter,
   buildTask,
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
+  deleteCrossTaskLink,
   deleteTask,
+  findNodeInBoard,
   formatCompactDate,
   getCompletedTaskSummary,
+  getCrossTaskLinkSegments,
   getTaskProcessEntries,
+  getUnifiedEdges,
   hasBoardContent,
   moveCanvasItem,
+  nodeHasOutgoingNext,
   normalizeBoard,
   restoreTask,
   togglePlanMilestoneComplete,
+  wouldCreateCycle,
 } from "../src/progressCore";
 
 describe("progress board core", () => {
@@ -90,6 +97,88 @@ describe("progress board core", () => {
     expect(burst.every((piece) => piece.id.startsWith("confetti-") && piece.color && piece.rotation !== undefined)).toBe(true);
   });
 
+  it("adds and deletes an isolated cross-task link", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] });
+    const linked = addCrossTaskLink(board, aiTask.nodes[1].id, kbTask.nodes[0].id, new Date("2026-05-19T12:00:00Z"));
+    const deleted = deleteCrossTaskLink(linked, linked.links[0].id);
+
+    expect(linked.links).toHaveLength(1);
+    expect(linked.links[0]).toMatchObject({
+      fromTaskId: aiTask.id,
+      fromNodeId: aiTask.nodes[1].id,
+      toTaskId: kbTask.id,
+      toNodeId: kbTask.nodes[0].id,
+      kind: "cross-task",
+      createdAt: "2026-05-19T12:00:00.000Z",
+    });
+    expect(deleted.links).toEqual([]);
+    expect(board.links).toEqual([]);
+  });
+
+  it("rejects same-task links", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] });
+
+    expect(() => addCrossTaskLink(board, aiTask.nodes[1].id, aiTask.nodes[0].id)).toThrow("Cross-task links only for now.");
+  });
+
+  it("allows one node to have multiple cross-task next links", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const writingTask = buildTask("写文章", { x: 1600, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [aiTask, kbTask, writingTask], stickers: [] });
+    const first = addCrossTaskLink(board, aiTask.nodes[0].id, kbTask.nodes[0].id);
+    const second = addCrossTaskLink(first, aiTask.nodes[0].id, writingTask.nodes[0].id);
+
+    expect(second.links).toHaveLength(2);
+    expect(second.links.map((link) => link.fromNodeId)).toEqual([aiTask.nodes[0].id, aiTask.nodes[0].id]);
+  });
+
+  it("allows multiple incoming links to one target and rejects cycles", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const writingTask = buildTask("写文章", { x: 1600, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [aiTask, kbTask, writingTask], stickers: [] });
+    const first = addCrossTaskLink(board, aiTask.nodes[1].id, kbTask.nodes[0].id);
+    const second = addCrossTaskLink(first, writingTask.nodes[1].id, kbTask.nodes[0].id);
+
+    expect(second.links).toHaveLength(2);
+    expect(wouldCreateCycle(second, kbTask.nodes[1].id, aiTask.nodes[0].id)).toBe(true);
+    expect(() => addCrossTaskLink(second, kbTask.nodes[1].id, aiTask.nodes[0].id)).toThrow("This link would create a loop.");
+  });
+
+  it("finds nodes and combines internal edges with cross-task links", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addCrossTaskLink(normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] }), aiTask.nodes[1].id, kbTask.nodes[0].id);
+
+    expect(findNodeInBoard(board, kbTask.nodes[0].id)).toMatchObject({ taskId: kbTask.id, taskTitle: "知识库" });
+    expect(getUnifiedEdges(board)).toHaveLength(3);
+    expect(nodeHasOutgoingNext(board, aiTask.nodes[0].id)).toBe(true);
+    expect(nodeHasOutgoingNext(board, aiTask.nodes[1].id)).toBe(true);
+  });
+
+  it("builds renderable cross-task link segments with endpoint coordinates", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 620 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addCrossTaskLink(normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] }), aiTask.nodes[1].id, kbTask.nodes[0].id);
+
+    expect(getCrossTaskLinkSegments(board)).toEqual([
+      {
+        id: board.links[0].id,
+        fromTaskId: aiTask.id,
+        toTaskId: kbTask.id,
+        x1: aiTask.nodes[1].x,
+        y1: aiTask.nodes[1].y,
+        x2: kbTask.nodes[0].x,
+        y2: kbTask.nodes[0].y,
+      },
+    ]);
+  });
+
   it("summarizes completed tasks for readable process cards", () => {
     const task = buildTask("上线用户可见卡片", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
     const withMilestone = addMilestoneAfter(task, task.nodes[0].id, {
@@ -124,6 +213,37 @@ describe("progress board core", () => {
     expect(getTaskProcessEntries(withSecond).map((entry) => entry.label)).toEqual(["Start", "Milestone", "Milestone", "Finish"]);
   });
 
+  it("keeps board-aware journey on the internal path when there are no cross-task links", () => {
+    const task = buildTask("内部路径", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [task], stickers: [] });
+
+    expect(getTaskProcessEntries(board, task).map((entry) => entry.title)).toEqual(["Start", "内部路径"]);
+    expect(getTaskProcessEntries(board, task).map((entry) => entry.taskTitle)).toEqual(["内部路径", "内部路径"]);
+  });
+
+  it("follows cross-task links in a board-aware journey and keeps task metadata", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addCrossTaskLink(normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] }), aiTask.nodes[1].id, kbTask.nodes[0].id);
+
+    expect(getTaskProcessEntries(board, aiTask).map((entry) => entry.title)).toEqual(["Start", "AI 项目", "Start", "知识库"]);
+    expect(getTaskProcessEntries(board, aiTask).map((entry) => entry.taskTitle)).toEqual(["AI 项目", "AI 项目", "知识库", "知识库"]);
+  });
+
+  it("summarizes completed tasks with board-aware cross-task journey steps", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const linked = addCrossTaskLink(normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] }), aiTask.nodes[1].id, kbTask.nodes[0].id);
+    const completed = completeTask(linked, aiTask.id, new Date("2026-05-20T08:00:00Z"));
+
+    expect(getCompletedTaskSummary(completed, completed.tasks[0])).toMatchObject({
+      totalSteps: 4,
+      milestoneCount: 0,
+      startedAt: "2026-05-18T09:30:00.000Z",
+      completedAt: "2026-05-20T08:00:00.000Z",
+    });
+  });
+
   it("labels plan milestones separately in the connected path", () => {
     const task = buildTask("展示计划路径", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
     const planned = addPlanMilestoneAfter(task, task.nodes[0].id, {
@@ -141,7 +261,18 @@ describe("progress board core", () => {
     const deleted = deleteTask(board, task.id);
 
     expect(board.stickers).toEqual([]);
+    expect(board.links).toEqual([]);
     expect(deleted.tasks).toEqual([]);
+  });
+
+  it("removes cross-task links attached to a deleted task", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addCrossTaskLink(normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] }), aiTask.nodes[1].id, kbTask.nodes[0].id);
+    const deleted = deleteTask(board, kbTask.id);
+
+    expect(deleted.tasks.map((task) => task.id)).toEqual([aiTask.id]);
+    expect(deleted.links).toEqual([]);
   });
 
   it("detects whether a stored board has recoverable user content", () => {

@@ -25,6 +25,7 @@ export function normalizeBoard(value) {
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
     links: Array.isArray(value?.links) ? value.links : [],
     achievements: Array.isArray(value?.achievements) ? value.achievements : [],
+    updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
 }
 
@@ -34,8 +35,24 @@ export function getNewlyUnlockedAchievements(previousBoard, nextBoard) {
   return Object.values(ACHIEVEMENTS).filter((achievement) => !previous.has(achievement.id) && next.has(achievement.id));
 }
 
+export function getAchievementCollection(board) {
+  const unlocked = new Set(board.achievements || []);
+  return Object.values(ACHIEVEMENTS).map((achievement) => ({
+    ...achievement,
+    unlocked: unlocked.has(achievement.id),
+  }));
+}
+
 export function hasBoardContent(board) {
   return board.tasks.length > 0 || board.stickers.length > 0;
+}
+
+export function chooseStoredBoard(primaryBoard, backupBoard) {
+  const primary = normalizeBoard(primaryBoard);
+  const backup = normalizeBoard(backupBoard);
+  if (!hasBoardContent(primary) && hasBoardContent(backup)) return backup;
+  if (hasBoardContent(primary) && hasBoardContent(backup) && backup.updatedAt && primary.updatedAt && backup.updatedAt > primary.updatedAt) return backup;
+  return primary;
 }
 
 export function findNodeInBoard(board, nodeId) {

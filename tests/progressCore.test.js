@@ -5,6 +5,7 @@ import {
   addMilestoneAfter,
   addPlanMilestoneAfter,
   buildTask,
+  chooseStoredBoard,
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
@@ -14,6 +15,7 @@ import {
   formatCompactDate,
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
+  getAchievementCollection,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
   getUnifiedEdges,
@@ -128,6 +130,18 @@ describe("progress board core", () => {
 
     expect(getNewlyUnlockedAchievements(board, linked).map((achievement) => achievement.id)).toEqual([ACHIEVEMENTS.firstCrossTaskLink.id]);
     expect(getNewlyUnlockedAchievements(linked, alreadyUnlocked)).toEqual([]);
+  });
+
+  it("builds an achievement collection with unlocked status", () => {
+    const board = normalizeBoard({ achievements: [ACHIEVEMENTS.firstCrossTaskLink.id] });
+
+    expect(getAchievementCollection(board)).toEqual([
+      expect.objectContaining({
+        id: ACHIEVEMENTS.firstCrossTaskLink.id,
+        title: ACHIEVEMENTS.firstCrossTaskLink.title,
+        unlocked: true,
+      }),
+    ]);
   });
 
   it("rejects same-task links", () => {
@@ -295,6 +309,24 @@ describe("progress board core", () => {
     expect(hasBoardContent({ tasks: [], stickers: [] })).toBe(false);
     expect(hasBoardContent({ tasks: [task], stickers: [] })).toBe(true);
     expect(hasBoardContent({ tasks: [], stickers: [createEmojiSticker("✨", { x: 1, y: 2 })] })).toBe(true);
+  });
+
+  it("recovers backup content when the primary stored board is empty", () => {
+    const task = buildTask("旧数据", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const backup = { tasks: [task], stickers: [] };
+    const primary = { tasks: [], stickers: [] };
+
+    expect(chooseStoredBoard(primary, backup)).toEqual(normalizeBoard(backup));
+    expect(chooseStoredBoard(backup, primary)).toEqual(normalizeBoard(backup));
+  });
+
+  it("uses the newest stored board when both primary and backup have content", () => {
+    const oldTask = buildTask("旧文件", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const newTask = buildTask("浏览器备份", { x: 900, y: 240 }, new Date("2026-05-19T09:30:00Z"));
+    const primary = { tasks: [oldTask], stickers: [], updatedAt: "2026-05-18T09:30:00.000Z" };
+    const backup = { tasks: [newTask], stickers: [], updatedAt: "2026-05-19T09:30:00.000Z" };
+
+    expect(chooseStoredBoard(primary, backup)).toEqual(normalizeBoard(backup));
   });
 
   it("formats compact labels as year and date", () => {

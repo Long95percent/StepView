@@ -5,6 +5,7 @@ import {
   addPlanMilestoneAfter,
   addCrossTaskLink,
   buildTask,
+  chooseStoredBoard,
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
@@ -12,11 +13,11 @@ import {
   deleteNode,
   deleteTask,
   formatCompactDate,
+  getAchievementCollection,
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
-  hasBoardContent,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
@@ -85,21 +86,51 @@ function App() {
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
+  const [achievementGalleryOpen, setAchievementGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
 
+  const persistBoard = React.useCallback((nextBoard) => {
+    const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
+    if (desktopApi) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      } catch (backupError) {
+        console.error("Failed to save browser backup", backupError);
+      }
+      desktopApi.saveBoard(snapshot).catch((error) => {
+        console.error("Failed to save board", error);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+          setToast("Local file save failed; browser backup saved.");
+        } catch (backupError) {
+          console.error("Failed to save browser backup", backupError);
+          setToast("Save failed. Please avoid closing StepView.");
+        }
+      });
+      return;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (error) {
+      console.error("Failed to save board", error);
+      setToast("Save failed. Please avoid closing StepView.");
+    }
+  }, []);
+
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         if (desktopApi) {
-          let saved = normalizeBoard(await desktopApi.loadBoard());
-          const legacyBrowserBoard = loadBrowserBoard();
-          if (!hasBoardContent(saved) && hasBoardContent(legacyBrowserBoard)) saved = legacyBrowserBoard;
-          if (!cancelled) setBoard(saved);
+          const saved = chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard());
+          if (!cancelled) {
+            setBoard(saved);
+            persistBoard(saved);
+          }
           return;
         }
         if (!cancelled) setBoard(loadBrowserBoard());
@@ -117,33 +148,20 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [persistBoard]);
 
-  React.useEffect(() => {
-    if (!isLoaded) return;
-    if (desktopApi) {
-      desktopApi.saveBoard(board).catch((error) => {
-        console.error("Failed to save board", error);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
-          setToast("Local file save failed; browser backup saved.");
-        } catch (backupError) {
-          console.error("Failed to save browser backup", backupError);
-          setToast("Save failed. Please avoid closing StepView.");
-        }
-      });
-      return;
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
-    } catch (error) {
-      console.error("Failed to save board", error);
-      setToast("Save failed. Please avoid closing StepView.");
-    }
-  }, [board, isLoaded]);
+  const updateBoard = React.useCallback((updater) => {
+    setBoard((current) => {
+      const nextBoard = typeof updater === "function" ? updater(current) : updater;
+      if (isLoaded) persistBoard(nextBoard);
+      return nextBoard;
+    });
+  }, [isLoaded, persistBoard]);
 
   const activeTasks = board.tasks.filter((task) => task.status === "active");
   const completedTasks = board.tasks.filter((task) => task.status === "completed");
+  const achievementCollection = getAchievementCollection(board);
+  const unlockedAchievements = achievementCollection.filter((achievement) => achievement.unlocked);
   const selectedCompletedTask = completedTasks.find((task) => task.id === selectedCompletedTaskId);
   const latestCompletedAt = completedTasks
     .map((task) => task.completedAt)
@@ -152,7 +170,7 @@ function App() {
     .at(-1);
 
   const updateTask = (taskId, updater) => {
-    setBoard((current) => ({
+    updateBoard((current) => ({
       ...current,
       tasks: current.tasks.map((task) => (task.id === taskId ? updater(task) : task)),
     }));
@@ -165,7 +183,7 @@ function App() {
 
   const createGoal = (position = { x: 760 + activeTasks.length * 80, y: 360 + activeTasks.length * 80 }) => {
     if (!quickGoal.trim()) return;
-    setBoard((current) => ({ ...current, tasks: [...current.tasks, buildTask(quickGoal, position, new Date())] }));
+    updateBoard((current) => ({ ...current, tasks: [...current.tasks, buildTask(quickGoal, position, new Date())] }));
     setMenu(null);
   };
 
@@ -187,7 +205,7 @@ function App() {
   };
 
   const clearBoard = () => {
-    if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) setBoard(INITIAL_BOARD);
+    if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) updateBoard(INITIAL_BOARD);
   };
 
   const showToast = (message) => {
@@ -207,14 +225,14 @@ function App() {
         setSelectedLinkId(null);
       }
       if ((event.key === "Delete" || event.key === "Backspace") && selectedLinkId) {
-        setBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
+        updateBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
         setSelectedLinkId(null);
         showToast("Link deleted.");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [linkDrag, selectedLinkId]);
+  }, [linkDrag, selectedLinkId, updateBoard]);
 
   React.useEffect(() => {
     if (!linkDrag) return undefined;
@@ -232,7 +250,7 @@ function App() {
   };
 
   const finishTask = (task, node) => {
-    setBoard((current) => completeTask(current, task.id, new Date()));
+    updateBoard((current) => completeTask(current, task.id, new Date()));
     celebrateAt({ x: node.x, y: node.y });
   };
 
@@ -251,7 +269,7 @@ function App() {
     try {
       const nextBoard = addCrossTaskLink(board, linkDrag.nodeId, targetNode.id, new Date());
       const [achievement] = getNewlyUnlockedAchievements(board, nextBoard);
-      setBoard(nextBoard);
+      updateBoard(nextBoard);
       if (achievement) {
         setAchievementPopup(achievement);
         window.setTimeout(() => setAchievementPopup(null), 3600);
@@ -288,7 +306,7 @@ function App() {
       return;
     }
     const world = screenToWorld(event, viewport, canvasRef.current);
-    setBoard((current) => moveCanvasItem(current, dragState.id, { x: world.x - dragState.offsetX, y: world.y - dragState.offsetY }));
+    updateBoard((current) => moveCanvasItem(current, dragState.id, { x: world.x - dragState.offsetX, y: world.y - dragState.offsetY }));
   };
 
   const onWheel = (event) => {
@@ -302,7 +320,7 @@ function App() {
     const droppedEmoji = event.dataTransfer.getData("text/emoji");
     if (!droppedEmoji) return;
     const position = screenToWorld(event, viewport, canvasRef.current);
-    setBoard((current) => ({ ...current, stickers: [...current.stickers, createEmojiSticker(droppedEmoji, position)] }));
+    updateBoard((current) => ({ ...current, stickers: [...current.stickers, createEmojiSticker(droppedEmoji, position)] }));
   };
 
   return (
@@ -351,6 +369,20 @@ function App() {
         </section>
 
         <section>
+          <h2>🏅 Achievements</h2>
+          <div className="completedEntry achievementEntry">
+            <div>
+              <span>{emoji(0x1f3c5)}</span>
+              <strong>{unlockedAchievements.length}/{achievementCollection.length} unlocked</strong>
+              <small>{unlockedAchievements.at(-1)?.title || "No badges yet"}</small>
+            </div>
+            <button className="primary" type="button" onClick={() => setAchievementGalleryOpen(true)}>
+              Collection ✨
+            </button>
+          </div>
+        </section>
+
+        <section>
           <h2>💾 Save</h2>
           <p className="storagePill">{desktopApi ? "Local file ✅" : "Browser ✅"}</p>
           {desktopApi && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
@@ -385,7 +417,7 @@ function App() {
         onDrop={dropEmoji}
         onDragOver={(event) => event.preventDefault()}
       >
-        {activeTasks.length === 0 && board.stickers.length === 0 && (
+        {isLoaded && activeTasks.length === 0 && board.stickers.length === 0 && (
           <div className="emptyState">
             <span>{emoji(0x1f680)}</span>
             <h1>Create your first goal</h1>
@@ -456,7 +488,7 @@ function App() {
                       <button className="done" onClick={(event) => { event.stopPropagation(); finishTask(task, node); }}>
                         Done ✅
                       </button>
-                      <button className="danger" onClick={(event) => { event.stopPropagation(); setBoard((current) => deleteTask(current, task.id)); }}>
+                      <button className="danger" onClick={(event) => { event.stopPropagation(); updateBoard((current) => deleteTask(current, task.id)); }}>
                         Delete 🗑️
                       </button>
                     </div>
@@ -487,7 +519,7 @@ function App() {
               className="sticker"
               style={{ left: sticker.x, top: sticker.y }}
               onPointerDown={(event) => startPointerDrag(event, "emoji", sticker.id)}
-              onDoubleClick={() => setBoard((current) => ({ ...current, stickers: current.stickers.filter((item) => item.id !== sticker.id) }))}
+              onDoubleClick={() => updateBoard((current) => ({ ...current, stickers: current.stickers.filter((item) => item.id !== sticker.id) }))}
             >
               {sticker.emoji}
             </button>
@@ -621,14 +653,44 @@ function App() {
                       </div>
                       <div className="completedActions">
                         <button type="button" onClick={() => setSelectedCompletedTaskId(task.id)}>Journey 🗺️</button>
-                        <button type="button" onClick={() => setBoard((current) => restoreTask(current, task.id))}>↩</button>
-                        <button type="button" onClick={() => setBoard((current) => deleteTask(current, task.id))}>🗑️</button>
+                        <button type="button" onClick={() => updateBoard((current) => restoreTask(current, task.id))}>↩</button>
+                        <button type="button" onClick={() => updateBoard((current) => deleteTask(current, task.id))}>🗑️</button>
                       </div>
                     </article>
                   );
                 })}
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {achievementGalleryOpen && (
+        <div className="galleryBackdrop" onPointerDown={() => setAchievementGalleryOpen(false)}>
+          <section className="completedGallery achievementGallery" onPointerDown={(event) => event.stopPropagation()}>
+            <header className="galleryHeader">
+              <div>
+                <span>{emoji(0x1f3c5)}</span>
+                <div>
+                  <h2>Achievements 🏅</h2>
+                  <p>{unlockedAchievements.length} of {achievementCollection.length} unlocked</p>
+                </div>
+              </div>
+              <button className="galleryClose" type="button" onClick={() => setAchievementGalleryOpen(false)}>Close ✕</button>
+            </header>
+
+            <div className="achievementGrid">
+              {achievementCollection.map((achievement) => (
+                <article key={achievement.id} className={`achievementCard ${achievement.unlocked ? "unlocked" : "locked"}`}>
+                  <span>{achievement.unlocked ? achievement.emoji : "🔒"}</span>
+                  <div>
+                    <small>{achievement.unlocked ? "Unlocked" : "Locked"}</small>
+                    <strong>{achievement.title}</strong>
+                    <p>{achievement.detail}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
           </section>
         </div>
       )}

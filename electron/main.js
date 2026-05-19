@@ -2,26 +2,17 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBoardStorage } from "./boardStorage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
 app.setName("StepView");
-const dataFile = () => path.join(app.getPath("userData"), "stepview-board.json");
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+const boardStorage = createBoardStorage({ dataDir: app.getPath("userData") });
+let isQuittingAfterStorageFlush = false;
 
-async function readBoard() {
-  try {
-    const text = await fs.readFile(dataFile(), "utf8");
-    return JSON.parse(text);
-  } catch (error) {
-    if (error.code !== "ENOENT") console.error("Failed to read board", error);
-    return { tasks: [], stickers: [] };
-  }
-}
-
-async function writeBoard(board) {
-  await fs.mkdir(path.dirname(dataFile()), { recursive: true });
-  await fs.writeFile(dataFile(), JSON.stringify(board, null, 2), "utf8");
-  return { ok: true, path: dataFile() };
+if (!gotSingleInstanceLock) {
+  app.quit();
 }
 
 function createWindow() {
@@ -54,12 +45,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  ipcMain.handle("board:load", readBoard);
-  ipcMain.handle("board:save", (_event, board) => writeBoard(board));
+  app.on("second-instance", () => {
+    const [window] = BrowserWindow.getAllWindows();
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.focus();
+  });
+
+  ipcMain.handle("board:load", boardStorage.readBoard);
+  ipcMain.handle("board:save", (_event, board) => boardStorage.writeBoard(board));
   ipcMain.handle("board:reveal", async () => {
-    await fs.mkdir(path.dirname(dataFile()), { recursive: true });
-    await shell.showItemInFolder(dataFile());
-    return dataFile();
+    await fs.mkdir(path.dirname(boardStorage.boardPath()), { recursive: true });
+    await shell.showItemInFolder(boardStorage.boardPath());
+    return boardStorage.boardPath();
   });
 
   createWindow();
@@ -70,4 +68,13 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (isQuittingAfterStorageFlush) return;
+  event.preventDefault();
+  boardStorage.flushWrites().finally(() => {
+    isQuittingAfterStorageFlush = true;
+    app.quit();
+  });
 });

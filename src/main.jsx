@@ -48,7 +48,7 @@ const EMOJI_LIBRARY = [
   0x1f40d, 0x1f419, 0x1f980, 0x1f99e, 0x1f9a6, 0x1f9a5, 0x1f99c, 0x1f3d5, 0x1f3e1, 0x1f3d6,
   0x26f2, 0x1f5fb, 0x1f3a1, 0x1f3a0, 0x1f3aa, 0x1f3d9, 0x1f6d6, 0x1f6cb, 0x1f6cf, 0x1f9f8,
 ].map(emoji);
-const INITIAL_BOARD = { tasks: [], stickers: [] };
+const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
 const desktopApi = window.stepview;
 
 function loadBrowserBoard() {
@@ -94,18 +94,24 @@ function App() {
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
-      if (desktopApi) {
-        let saved = normalizeBoard(await desktopApi.loadBoard());
-        const legacyBrowserBoard = loadBrowserBoard();
-        if (!hasBoardContent(saved) && hasBoardContent(legacyBrowserBoard)) saved = legacyBrowserBoard;
-        if (!cancelled) {
-          setBoard(saved);
-          setIsLoaded(true);
+      try {
+        if (desktopApi) {
+          let saved = normalizeBoard(await desktopApi.loadBoard());
+          const legacyBrowserBoard = loadBrowserBoard();
+          if (!hasBoardContent(saved) && hasBoardContent(legacyBrowserBoard)) saved = legacyBrowserBoard;
+          if (!cancelled) setBoard(saved);
+          return;
         }
-        return;
+        if (!cancelled) setBoard(loadBrowserBoard());
+      } catch (error) {
+        console.error("Failed to load board", error);
+        if (!cancelled) {
+          setBoard(loadBrowserBoard());
+          setToast("Load failed, using browser backup.");
+        }
+      } finally {
+        if (!cancelled) setIsLoaded(true);
       }
-      setBoard(loadBrowserBoard());
-      setIsLoaded(true);
     }
     load();
     return () => {
@@ -116,10 +122,24 @@ function App() {
   React.useEffect(() => {
     if (!isLoaded) return;
     if (desktopApi) {
-      desktopApi.saveBoard(board);
+      desktopApi.saveBoard(board).catch((error) => {
+        console.error("Failed to save board", error);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
+          setToast("Local file save failed; browser backup saved.");
+        } catch (backupError) {
+          console.error("Failed to save browser backup", backupError);
+          setToast("Save failed. Please avoid closing StepView.");
+        }
+      });
       return;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
+    } catch (error) {
+      console.error("Failed to save board", error);
+      setToast("Save failed. Please avoid closing StepView.");
+    }
   }, [board, isLoaded]);
 
   const activeTasks = board.tasks.filter((task) => task.status === "active");

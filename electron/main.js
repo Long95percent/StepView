@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
+app.setName("StepView");
 const dataFile = () => path.join(app.getPath("userData"), "stepview-board.json");
 
 async function readBoard() {

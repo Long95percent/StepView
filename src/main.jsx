@@ -14,6 +14,7 @@ import {
   formatCompactDate,
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
+  getNewlyUnlockedAchievements,
   getTaskProcessEntries,
   hasBoardContent,
   moveCanvasItem,
@@ -70,6 +71,7 @@ function App() {
   const [noteDraft, setNoteDraft] = React.useState(null);
   const [linkDrag, setLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
+  const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
@@ -233,7 +235,13 @@ function App() {
   const finishLinkDrag = (targetNode) => {
     if (!linkDrag || linkDrag.nodeId === targetNode.id) return false;
     try {
-      setBoard(addCrossTaskLink(board, linkDrag.nodeId, targetNode.id, new Date()));
+      const nextBoard = addCrossTaskLink(board, linkDrag.nodeId, targetNode.id, new Date());
+      const [achievement] = getNewlyUnlockedAchievements(board, nextBoard);
+      setBoard(nextBoard);
+      if (achievement) {
+        setAchievementPopup(achievement);
+        window.setTimeout(() => setAchievementPopup(null), 3600);
+      }
       showToast("Link created.");
     } catch (error) {
       showToast(error.message);
@@ -489,6 +497,16 @@ function App() {
         </div>
 
         {toast && <div className="toast">{toast}</div>}
+        {achievementPopup && (
+          <div className="achievementPopup">
+            <span>{achievementPopup.emoji}</span>
+            <div>
+              <small>Achievement unlocked</small>
+              <strong>{achievementPopup.title}</strong>
+              <p>{achievementPopup.detail}</p>
+            </div>
+          </div>
+        )}
         {menu && (
           <div className="contextMenu" style={{ left: menu.x, top: menu.y }}>
             <button onClick={() => createGoal(menu.world)}>Create goal here {emoji(0x1f3c1)}</button>

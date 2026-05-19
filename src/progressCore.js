@@ -10,12 +10,28 @@ export const ICONS = {
   planMilestone: icon(0x1f4dd),
 };
 
+export const ACHIEVEMENTS = {
+  firstCrossTaskLink: {
+    id: "first-cross-task-link",
+    emoji: "🕸️",
+    title: "Web Weaver",
+    detail: "Connected two goals with a purple thread.",
+  },
+};
+
 export function normalizeBoard(value) {
   return {
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
     links: Array.isArray(value?.links) ? value.links : [],
+    achievements: Array.isArray(value?.achievements) ? value.achievements : [],
   };
+}
+
+export function getNewlyUnlockedAchievements(previousBoard, nextBoard) {
+  const previous = new Set(previousBoard.achievements || []);
+  const next = new Set(nextBoard.achievements || []);
+  return Object.values(ACHIEVEMENTS).filter((achievement) => !previous.has(achievement.id) && next.has(achievement.id));
 }
 
 export function hasBoardContent(board) {
@@ -98,6 +114,9 @@ export function addCrossTaskLink(board, fromNodeId, toNodeId, now = new Date()) 
         createdAt: now.toISOString(),
       },
     ],
+    achievements: board.achievements?.includes(ACHIEVEMENTS.firstCrossTaskLink.id)
+      ? board.achievements
+      : [...(board.achievements || []), ACHIEVEMENTS.firstCrossTaskLink.id],
   };
 }
 

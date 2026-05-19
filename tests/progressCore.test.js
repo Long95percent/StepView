@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addCrossTaskLink,
+  ACHIEVEMENTS,
   addMilestoneAfter,
   addPlanMilestoneAfter,
   buildTask,
@@ -13,6 +14,7 @@ import {
   formatCompactDate,
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
+  getNewlyUnlockedAchievements,
   getTaskProcessEntries,
   getUnifiedEdges,
   hasBoardContent,
@@ -115,6 +117,17 @@ describe("progress board core", () => {
     });
     expect(deleted.links).toEqual([]);
     expect(board.links).toEqual([]);
+  });
+
+  it("unlocks the first cross-task link achievement only once", () => {
+    const aiTask = buildTask("AI 项目", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const kbTask = buildTask("知识库", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [aiTask, kbTask], stickers: [] });
+    const linked = addCrossTaskLink(board, aiTask.nodes[1].id, kbTask.nodes[0].id);
+    const alreadyUnlocked = normalizeBoard({ ...linked, achievements: [ACHIEVEMENTS.firstCrossTaskLink.id] });
+
+    expect(getNewlyUnlockedAchievements(board, linked).map((achievement) => achievement.id)).toEqual([ACHIEVEMENTS.firstCrossTaskLink.id]);
+    expect(getNewlyUnlockedAchievements(linked, alreadyUnlocked)).toEqual([]);
   });
 
   it("rejects same-task links", () => {
@@ -262,6 +275,7 @@ describe("progress board core", () => {
 
     expect(board.stickers).toEqual([]);
     expect(board.links).toEqual([]);
+    expect(board.achievements).toEqual([]);
     expect(deleted.tasks).toEqual([]);
   });
 

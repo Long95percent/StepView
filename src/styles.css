@@ -594,6 +594,42 @@ button { cursor: pointer; }
   transform: translateX(-50%);
   backdrop-filter: blur(18px);
 }
+.achievementPopup {
+  position: fixed;
+  z-index: 22;
+  right: 28px;
+  bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: min(340px, calc(100vw - 40px));
+  padding: 15px;
+  border: 1px solid rgba(196, 142, 255, .34);
+  border-radius: 22px;
+  color: #ffffff;
+  background: linear-gradient(145deg, rgba(46, 28, 83, .94), rgba(12, 17, 38, .9));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .42), 0 0 34px rgba(196, 142, 255, .22);
+  backdrop-filter: blur(20px);
+  animation: achievementPop 360ms cubic-bezier(.2, .8, .2, 1);
+}
+.achievementPopup > span {
+  display: grid;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, .12);
+  font-size: 28px;
+}
+.achievementPopup div { display: grid; gap: 3px; min-width: 0; }
+.achievementPopup small { color: #c9b8ff; font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
+.achievementPopup strong { font-size: 18px; line-height: 1.1; }
+.achievementPopup p { margin: 0; color: #d7e3f7; font-size: 12px; line-height: 1.4; }
+@keyframes achievementPop {
+  from { opacity: 0; transform: translateY(16px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .wide {
   width: 100%;
 }

@@ -2,8 +2,10 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   addMilestoneAfter,
+  addPlanMilestoneAfter,
   buildTask,
   completeTask,
+  createConfettiBurst,
   createEmojiSticker,
   deleteNode,
   deleteTask,
@@ -14,6 +16,7 @@ import {
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
+  togglePlanMilestoneComplete,
 } from "./progressCore";
 import "./styles.css";
 
@@ -58,6 +61,7 @@ function App() {
   const [noteDraft, setNoteDraft] = React.useState(null);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
+  const [confetti, setConfetti] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
@@ -138,14 +142,15 @@ function App() {
     });
   };
 
-  const addMilestone = (taskId, nodeId) => {
-    setNoteDraft({ taskId, nodeId, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16) });
+  const addMilestone = (taskId, nodeId, kind = "milestone") => {
+    setNoteDraft({ taskId, nodeId, kind, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16) });
   };
 
   const saveMilestone = (event) => {
     event.preventDefault();
+    const addNode = noteDraft.kind === "plan-milestone" ? addPlanMilestoneAfter : addMilestoneAfter;
     updateTask(noteDraft.taskId, (task) =>
-      addMilestoneAfter(task, noteDraft.nodeId, {
+      addNode(task, noteDraft.nodeId, {
         title: noteDraft.title,
         detail: noteDraft.detail,
         timestamp: new Date(noteDraft.timestamp).toISOString(),
@@ -155,7 +160,23 @@ function App() {
   };
 
   const clearBoard = () => {
-    if (confirm("Clear all active and completed tasks?")) setBoard(INITIAL_BOARD);
+    if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) setBoard(INITIAL_BOARD);
+  };
+
+  const celebrateAt = (position) => {
+    const burst = createConfettiBurst(position);
+    setConfetti(burst);
+    window.setTimeout(() => setConfetti([]), 1100);
+  };
+
+  const finishTask = (task, node) => {
+    setBoard((current) => completeTask(current, task.id, new Date()));
+    celebrateAt({ x: node.x, y: node.y });
+  };
+
+  const completePlanMilestone = (task, node) => {
+    updateTask(task.id, (currentTask) => togglePlanMilestoneComplete(currentTask, node.id, new Date()));
+    if (node.status !== "completed") celebrateAt({ x: node.x, y: node.y });
   };
 
   const startPointerDrag = (event, type, id) => {
@@ -291,7 +312,7 @@ function App() {
               {task.nodes.map((node) => (
                 <article
                   key={node.id}
-                  className={`node ${node.kind} ${selectedNodeId === node.id ? "selected" : ""}`}
+                  className={`node ${node.kind} ${node.status === "completed" ? "completed" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
                   style={{ left: node.x, top: node.y }}
                   onPointerDown={(event) => startPointerDrag(event, "node", node.id)}
                   onClick={(event) => {
@@ -302,7 +323,10 @@ function App() {
                   <div className="nodeTop">
                     <span className="nodeEmoji">{node.emoji}</span>
                     {node.kind !== "finish" && (
-                      <button className="add" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id); }}>+</button>
+                      <div className="addGroup">
+                        <button className="add" title="Add milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id); }}>+</button>
+                        <button className="add planAdd" title="Add plan milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id, "plan-milestone"); }}>＋</button>
+                      </div>
                     )}
                   </div>
                   <strong className="nodeTitle">{node.title}</strong>
@@ -310,7 +334,7 @@ function App() {
                   {selectedNodeId === node.id && <p>{node.detail || "No details yet."}</p>}
                   {selectedNodeId === node.id && node.kind === "finish" && (
                     <div className="nodeActions">
-                      <button className="done" onClick={(event) => { event.stopPropagation(); setBoard((current) => completeTask(current, task.id, new Date())); }}>
+                      <button className="done" onClick={(event) => { event.stopPropagation(); finishTask(task, node); }}>
                         Done ✅
                       </button>
                       <button className="danger" onClick={(event) => { event.stopPropagation(); setBoard((current) => deleteTask(current, task.id)); }}>
@@ -322,6 +346,16 @@ function App() {
                     <button className="danger" onClick={(event) => { event.stopPropagation(); updateTask(task.id, (currentTask) => deleteNode(currentTask, node.id)); }}>
                       Delete 🗑️
                     </button>
+                  )}
+                  {selectedNodeId === node.id && node.kind === "plan-milestone" && (
+                    <div className="nodeActions">
+                      <button className="done" onClick={(event) => { event.stopPropagation(); completePlanMilestone(task, node); }}>
+                        {node.status === "completed" ? "Undo ↩️" : "Complete ✅"}
+                      </button>
+                      <button className="danger" onClick={(event) => { event.stopPropagation(); updateTask(task.id, (currentTask) => deleteNode(currentTask, node.id)); }}>
+                        Delete 🗑️
+                      </button>
+                    </div>
                   )}
                 </article>
               ))}
@@ -339,6 +373,21 @@ function App() {
               {sticker.emoji}
             </button>
           ))}
+          {confetti.map((piece) => (
+            <span
+              key={piece.id}
+              className="confettiPiece"
+              style={{
+                left: piece.x,
+                top: piece.y,
+                "--dx": `${piece.dx}px`,
+                "--dy": `${piece.dy}px`,
+                "--color": piece.color,
+                "--rotation": `${piece.rotation}deg`,
+                animationDelay: `${piece.delay}ms`,
+              }}
+            />
+          ))}
         </div>
 
         {menu && (
@@ -351,7 +400,7 @@ function App() {
       {noteDraft && (
         <div className="modalBackdrop" onPointerDown={() => setNoteDraft(null)}>
           <form className="modal" onSubmit={saveMilestone} onPointerDown={(event) => event.stopPropagation()}>
-            <h2>📍 Milestone</h2>
+            <h2>{noteDraft.kind === "plan-milestone" ? "📝 Plan milestone" : "📍 Milestone"}</h2>
             <label>Name<input autoFocus required value={noteDraft.title} onChange={(event) => setNoteDraft({ ...noteDraft, title: event.target.value })} /></label>
             <label>Note<textarea value={noteDraft.detail} onChange={(event) => setNoteDraft({ ...noteDraft, detail: event.target.value })} /></label>
             <label>Time<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
@@ -384,13 +433,17 @@ function App() {
                       <strong>{selectedCompletedTask.title}</strong>
                       <small>✅ {formatCompactDate(selectedCompletedTask.completedAt)}</small>
                     </div>
+                    <div className="journeySummary">
+                      <span>{getCompletedTaskSummary(selectedCompletedTask).totalSteps} steps</span>
+                      <span>{getCompletedTaskSummary(selectedCompletedTask).milestoneCount} milestones</span>
+                    </div>
                   </div>
                   <div className="processTimeline journeyTimeline">
                     {getTaskProcessEntries(selectedCompletedTask).map((entry) => (
-                      <div key={entry.id} className={`processStep ${entry.kind}`}>
+                      <div key={entry.id} className={`processStep ${entry.kind} ${entry.status === "completed" ? "completed" : ""}`}>
                         <span className="processDot">{entry.emoji}</span>
                         <div>
-                          <small>{entry.label} · {formatCompactDate(entry.timestamp)}</small>
+                          <small>{entry.label}{entry.kind === "plan-milestone" ? ` · ${entry.status === "completed" ? "Completed" : "Planned"}` : ""} · {formatCompactDate(entry.timestamp)}</small>
                           <strong>{entry.title}</strong>
                           <p>{entry.detail || "No note."}</p>
                         </div>

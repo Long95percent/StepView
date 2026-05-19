@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   addMilestoneAfter,
+  addPlanMilestoneAfter,
   buildTask,
   completeTask,
+  createConfettiBurst,
   createEmojiSticker,
   deleteTask,
   formatCompactDate,
@@ -12,6 +14,7 @@ import {
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
+  togglePlanMilestoneComplete,
 } from "../src/progressCore";
 
 describe("progress board core", () => {
@@ -39,6 +42,21 @@ describe("progress board core", () => {
     expect(updated.edges.some((edge) => edge.from === task.nodes[0].id && edge.to === updated.nodes[1].id)).toBe(true);
   });
 
+  it("adds an incomplete plan milestone that can be marked complete", () => {
+    const task = buildTask("规划路径", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const planned = addPlanMilestoneAfter(task, task.nodes[0].id, {
+      title: "先做登录",
+      detail: "计划中的阶段",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const planNode = planned.nodes[1];
+    const completed = togglePlanMilestoneComplete(planned, planNode.id, new Date("2026-05-20T08:00:00Z"));
+
+    expect(planNode).toMatchObject({ kind: "plan-milestone", status: "planned", title: "先做登录" });
+    expect(completed.nodes[1]).toMatchObject({ status: "completed", completedAt: "2026-05-20T08:00:00.000Z" });
+    expect(task.nodes).toHaveLength(2);
+  });
+
   it("moves nodes and emoji stickers without mutating the original board", () => {
     const task = buildTask("可拖拽", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
     const sticker = createEmojiSticker("✨", { x: 100, y: 100 });
@@ -62,6 +80,14 @@ describe("progress board core", () => {
     expect(completed.tasks[0].completedAt).toBe("2026-05-20T08:00:00.000Z");
     expect(restored.tasks[0].status).toBe("active");
     expect(restored.tasks[0].completedAt).toBeUndefined();
+  });
+
+  it("creates a compact confetti burst around a completion point", () => {
+    const burst = createConfettiBurst({ x: 120, y: 240 }, 6);
+
+    expect(burst).toHaveLength(6);
+    expect(burst[0]).toMatchObject({ x: 120, y: 240 });
+    expect(burst.every((piece) => piece.id.startsWith("confetti-") && piece.color && piece.rotation !== undefined)).toBe(true);
   });
 
   it("summarizes completed tasks for readable process cards", () => {
@@ -96,6 +122,17 @@ describe("progress board core", () => {
 
     expect(getTaskProcessEntries(withSecond).map((entry) => entry.title)).toEqual(["Start", "第一步", "第二步", "展示完整路径"]);
     expect(getTaskProcessEntries(withSecond).map((entry) => entry.label)).toEqual(["Start", "Milestone", "Milestone", "Finish"]);
+  });
+
+  it("labels plan milestones separately in the connected path", () => {
+    const task = buildTask("展示计划路径", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const planned = addPlanMilestoneAfter(task, task.nodes[0].id, {
+      title: "准备素材",
+      detail: "还没完成",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+
+    expect(getTaskProcessEntries(planned).map((entry) => entry.label)).toEqual(["Start", "Plan", "Finish"]);
   });
 
   it("deletes a task and normalizes stored board data", () => {

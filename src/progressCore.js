@@ -7,6 +7,7 @@ export const ICONS = {
   start: icon(0x1f680),
   finish: icon(0x1f3c1),
   milestone: icon(0x1f4cd),
+  planMilestone: icon(0x1f4dd),
 };
 
 export function normalizeBoard(value) {
@@ -59,36 +60,89 @@ export function buildTask(title, finishPosition, now = new Date()) {
   };
 }
 
-export function addMilestoneAfter(task, sourceNodeId, note) {
+function addNodeAfter(task, sourceNodeId, node) {
   const sourceIndex = task.nodes.findIndex((node) => node.id === sourceNodeId);
   if (sourceIndex === -1) return task;
 
   const sourceNode = task.nodes[sourceIndex];
   const nextNode = task.nodes[sourceIndex + 1];
-  const milestone = {
+  const insertedNode = {
+    ...node,
     id: makeId("node"),
     taskId: task.id,
-    kind: "milestone",
-    emoji: ICONS.milestone,
-    title: note.title.trim() || "New milestone",
-    detail: note.detail.trim(),
-    timestamp: note.timestamp,
     x: sourceNode.x + HORIZONTAL_GAP,
     y: sourceNode.y + 20,
   };
 
   const nodes = [...task.nodes];
-  nodes.splice(sourceIndex + 1, 0, milestone);
+  nodes.splice(sourceIndex + 1, 0, insertedNode);
 
   const edges = task.edges.filter((edge) => !(edge.from === sourceNode.id && edge.to === nextNode?.id));
-  edges.push({ id: makeId("edge"), from: sourceNode.id, to: milestone.id });
-  if (nextNode) edges.push({ id: makeId("edge"), from: milestone.id, to: nextNode.id });
+  edges.push({ id: makeId("edge"), from: sourceNode.id, to: insertedNode.id });
+  if (nextNode) edges.push({ id: makeId("edge"), from: insertedNode.id, to: nextNode.id });
 
   return { ...task, nodes, edges };
 }
 
+export function addMilestoneAfter(task, sourceNodeId, note) {
+  const milestone = {
+    kind: "milestone",
+    emoji: ICONS.milestone,
+    title: note.title.trim() || "New milestone",
+    detail: note.detail.trim(),
+    timestamp: note.timestamp,
+  };
+
+  return addNodeAfter(task, sourceNodeId, milestone);
+}
+
+export function addPlanMilestoneAfter(task, sourceNodeId, note) {
+  const planMilestone = {
+    kind: "plan-milestone",
+    status: "planned",
+    emoji: ICONS.planMilestone,
+    title: note.title.trim() || "New plan",
+    detail: note.detail.trim(),
+    timestamp: note.timestamp,
+  };
+
+  return addNodeAfter(task, sourceNodeId, planMilestone);
+}
+
+export function togglePlanMilestoneComplete(task, nodeId, now = new Date()) {
+  return {
+    ...task,
+    nodes: task.nodes.map((node) => {
+      if (node.id !== nodeId || node.kind !== "plan-milestone") return node;
+      if (node.status === "completed") {
+        const { completedAt, ...plannedNode } = node;
+        return { ...plannedNode, status: "planned" };
+      }
+      return { ...node, status: "completed", completedAt: now.toISOString() };
+    }),
+  };
+}
+
 export function createEmojiSticker(emoji, position) {
   return { id: makeId("emoji"), emoji, x: position.x, y: position.y };
+}
+
+export function createConfettiBurst(position, count = 18) {
+  const colors = ["#80f7ff", "#c48eff", "#ffdb5c", "#ff5474", "#4cffc7", "#ffffff"];
+  return Array.from({ length: count }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / count;
+    const distance = 80 + (index % 4) * 18;
+    return {
+      id: makeId("confetti"),
+      x: position.x,
+      y: position.y,
+      dx: Math.cos(angle) * distance,
+      dy: Math.sin(angle) * distance - 32,
+      color: colors[index % colors.length],
+      rotation: index * 37,
+      delay: (index % 5) * 18,
+    };
+  });
 }
 
 export function moveCanvasItem(board, itemId, position) {
@@ -136,11 +190,12 @@ export function getTaskProcessEntries(task) {
     entries.push({
       id: current.id,
       kind: current.kind,
-      label: current.kind === "start" ? "Start" : current.kind === "finish" ? "Finish" : "Milestone",
+      label: current.kind === "start" ? "Start" : current.kind === "finish" ? "Finish" : current.kind === "plan-milestone" ? "Plan" : "Milestone",
       emoji: current.emoji,
       title: current.title,
       detail: current.detail,
       timestamp: current.timestamp,
+      status: current.status,
     });
     current = nodesById.get(nextById.get(current.id));
   }
@@ -152,7 +207,7 @@ export function getCompletedTaskSummary(task) {
   const processEntries = getTaskProcessEntries(task);
   return {
     totalSteps: processEntries.length,
-    milestoneCount: processEntries.filter((entry) => entry.kind === "milestone").length,
+    milestoneCount: processEntries.filter((entry) => entry.kind === "milestone" || entry.kind === "plan-milestone").length,
     startedAt: processEntries[0]?.timestamp || task.createdAt,
     completedAt: task.completedAt,
   };

@@ -325,6 +325,20 @@ button { cursor: pointer; }
 .journeyHero div { display: grid; gap: 4px; }
 .journeyHero strong { font-size: 24px; letter-spacing: -.05em; }
 .journeyHero small { color: #9fb2d2; }
+.journeySummary {
+  margin-left: auto;
+  grid-template-columns: repeat(2, max-content);
+  gap: 8px;
+}
+.journeySummary span {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 999px;
+  color: #d9e8ff;
+  background: rgba(255, 255, 255, .07);
+  font-size: 12px;
+  font-weight: 750;
+}
 .journeyTimeline {
   max-height: none;
   margin-top: 0;
@@ -333,6 +347,8 @@ button { cursor: pointer; }
 .journeyTimeline .processStep { grid-template-columns: 42px 1fr; padding-bottom: 22px; }
 .journeyTimeline .processStep::before { left: 20px; top: 44px; }
 .journeyTimeline .processDot { width: 42px; height: 42px; }
+.journeyTimeline .processStep.plan-milestone .processDot { filter: grayscale(.9) saturate(.4); }
+.journeyTimeline .processStep.plan-milestone.completed .processDot { filter: none; box-shadow: 0 0 24px rgba(196, 142, 255, .35); }
 .journeyTimeline .processStep strong { font-size: 18px; letter-spacing: -.02em; }
 .journeyTimeline .processStep p { max-width: 680px; font-size: 13px; }
 
@@ -365,6 +381,17 @@ button { cursor: pointer; }
 }
 .node.finish { border-color: rgba(255, 219, 92, .52); }
 .node.start { border-color: rgba(76, 255, 199, .45); }
+.node.plan-milestone {
+  border-color: rgba(170, 178, 196, .28);
+  background: linear-gradient(145deg, rgba(60, 66, 82, .72), rgba(22, 26, 34, .78));
+  filter: grayscale(.9) saturate(.35);
+}
+.node.plan-milestone.completed {
+  border-color: rgba(196, 142, 255, .58);
+  background: linear-gradient(145deg, rgba(68, 42, 112, .9), rgba(16, 27, 65, .86));
+  filter: none;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 28px rgba(173, 113, 255, .22), inset 0 1px rgba(255,255,255,.16);
+}
 .node.selected { z-index: 3; outline: 3px solid rgba(0, 213, 255, .22); }
 .nodeTop { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .nodeEmoji { font-size: 34px; filter: drop-shadow(0 8px 12px rgba(0,0,0,.35)); }
@@ -381,6 +408,9 @@ button { cursor: pointer; }
   box-shadow: 0 0 22px rgba(128, 247, 255, .55);
   font-weight: 800;
 }
+.addGroup { display: flex; gap: 7px; }
+.planAdd { background: #b9bdc9; box-shadow: 0 0 18px rgba(185, 189, 201, .35); }
+.node.plan-milestone.completed .planAdd { background: #c48eff; box-shadow: 0 0 22px rgba(196, 142, 255, .48); }
 
 .sticker {
   position: absolute;
@@ -389,6 +419,22 @@ button { cursor: pointer; }
   font-size: 44px;
   transform: translate(-50%, -50%);
   filter: drop-shadow(0 14px 16px rgba(0,0,0,.35));
+}
+.confettiPiece {
+  position: absolute;
+  z-index: 6;
+  width: 9px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--color);
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(var(--rotation));
+  animation: confettiBurst 900ms cubic-bezier(.17, .67, .24, 1) forwards;
+}
+@keyframes confettiBurst {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.4) rotate(var(--rotation)); }
+  12% { opacity: 1; }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 120px)) scale(.9) rotate(calc(var(--rotation) + 280deg)); }
 }
 .contextMenu {
   position: fixed;

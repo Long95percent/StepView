@@ -525,6 +525,36 @@ button { cursor: pointer; }
 .modal textarea { min-height: 120px; resize: vertical; }
 .modalActions { display: flex; justify-content: flex-end; gap: 10px; }
 .modalActions button:first-child { background: rgba(255,255,255,.1); box-shadow: none; }
+.tutorialPanel {
+  width: min(560px, calc(100vw - 40px));
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 28px;
+  color: #ffffff;
+  background: linear-gradient(145deg, rgba(18, 25, 54, .96), rgba(9, 13, 30, .94));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .46), inset 0 1px rgba(255,255,255,.12);
+}
+.tutorialPanel header { display: flex; align-items: center; gap: 14px; }
+.tutorialPanel header > span {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 18px;
+  background: rgba(128, 247, 255, .12);
+  font-size: 28px;
+}
+.tutorialPanel h2 { margin: 0; font-size: 27px; letter-spacing: -.05em; }
+.tutorialPanel p { margin: 3px 0 0; color: #aebddb; line-height: 1.55; }
+.tutorialPlaceholder {
+  padding: 18px;
+  border: 1px dashed rgba(128, 247, 255, .22);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, .05);
+}
+.tutorialPlaceholder strong { display: block; margin-bottom: 6px; }
 
 .quickCreate {
   display: grid;
@@ -571,6 +601,7 @@ button { cursor: pointer; }
   text-align: center;
   transform: translate(-50%, -50%);
   backdrop-filter: blur(24px);
+  pointer-events: none;
 }
 .emptyState span { font-size: 58px; }
 .emptyState h1 { margin: 12px 0 20px; font-size: 30px; line-height: 1; letter-spacing: -.06em; }

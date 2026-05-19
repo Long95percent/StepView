@@ -3,3 +3,4 @@
 - Do not rewrite entire files unless necessary
 - If encoding errors appear, stop and ask for confirmation
 - Preserve existing line endings
+- Strictly forbidden: never add or keep demo/sample/tutorial logic that overwrites or replaces user board data; demos must be non-destructive (modal, separate preview, or explicit import after confirmation).

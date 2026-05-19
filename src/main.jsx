@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   addMilestoneAfter,
@@ -36,6 +36,17 @@ const EMOJI_LIBRARY = [
   0x1f433, 0x1f984, 0x1f34e, 0x1f355, 0x1f354, 0x1f370, 0x1f37a, 0x1f3e0, 0x1f3e2, 0x1f6f8,
   0x1f697, 0x2708, 0x23f0, 0x1f5d3, 0x2764, 0x1f49c, 0x1f499, 0x1f5a4, 0x1f4a5, 0x1f441,
   0x1f9f2, 0x1f9f1, 0x1f4f8, 0x1f3ac, 0x1f3b5, 0x1f50b, 0x1f6a6, 0x1f9f0, 0x1f6e1, 0x1f5dd,
+  0x1f600, 0x1f601, 0x1f602, 0x1f923, 0x1f603, 0x1f604, 0x1f605, 0x1f606, 0x1f609, 0x1f60a,
+  0x1f60b, 0x1f60e, 0x1f60d, 0x1f970, 0x1f618, 0x1f617, 0x1f914, 0x1f928, 0x1f610, 0x1f611,
+  0x1f636, 0x1f644, 0x1f60f, 0x1f623, 0x1f625, 0x1f62e, 0x1f910, 0x1f62f, 0x1f62a, 0x1f62b,
+  0x1f971, 0x1f634, 0x1f60c, 0x1f61b, 0x1f61c, 0x1f92a, 0x1f973, 0x1f978, 0x1f97a, 0x1f979,
+  0x1f62d, 0x1f631, 0x1f621, 0x1f624, 0x1f92f, 0x1f976, 0x1f975, 0x1f635, 0x1f974, 0x1f922,
+  0x1f337, 0x1f338, 0x1f339, 0x1f33a, 0x1f33b, 0x1f33c, 0x1f341, 0x1f342, 0x1f343, 0x1fab4,
+  0x1f334, 0x1f335, 0x1f344, 0x1fab5, 0x1fab7, 0x1f490, 0x1f407, 0x1f43f, 0x1f994, 0x1f98c,
+  0x1f987, 0x1f43a, 0x1f42f, 0x1f981, 0x1f42e, 0x1f437, 0x1f438, 0x1f435, 0x1f414, 0x1f427,
+  0x1f426, 0x1f986, 0x1f989, 0x1f98b, 0x1f41d, 0x1f41e, 0x1f40c, 0x1f41f, 0x1f420, 0x1f422,
+  0x1f40d, 0x1f419, 0x1f980, 0x1f99e, 0x1f9a6, 0x1f9a5, 0x1f99c, 0x1f3d5, 0x1f3e1, 0x1f3d6,
+  0x26f2, 0x1f5fb, 0x1f3a1, 0x1f3a0, 0x1f3aa, 0x1f3d9, 0x1f6d6, 0x1f6cb, 0x1f6cf, 0x1f9f8,
 ].map(emoji);
 const INITIAL_BOARD = { tasks: [], stickers: [] };
 const desktopApi = window.stepview;
@@ -72,6 +83,7 @@ function App() {
   const [linkDrag, setLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
   const [achievementPopup, setAchievementPopup] = React.useState(null);
+  const [tutorialOpen, setTutorialOpen] = React.useState(false);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
@@ -135,24 +147,6 @@ function App() {
     if (!quickGoal.trim()) return;
     setBoard((current) => ({ ...current, tasks: [...current.tasks, buildTask(quickGoal, position, new Date())] }));
     setMenu(null);
-  };
-
-  const loadDemoBoard = () => {
-    const demo = buildTask("Ship StepView v1", { x: 820, y: 360 }, new Date());
-    const withResearch = addMilestoneAfter(demo, demo.nodes[0].id, {
-      title: "Product design",
-      detail: "Define infinite canvas, notes, completed board, and emoji stickers.",
-      timestamp: new Date().toISOString(),
-    });
-    const withDesktop = addMilestoneAfter(withResearch, withResearch.nodes[1].id, {
-      title: "Desktop shell",
-      detail: "Run in Electron and save data to a local JSON file.",
-      timestamp: new Date().toISOString(),
-    });
-    setBoard({
-      tasks: [withDesktop],
-      stickers: [createEmojiSticker(emoji(0x2728), { x: 360, y: 210 }), createEmojiSticker(emoji(0x1f3af), { x: 980, y: 250 })],
-    });
   };
 
   const addMilestone = (taskId, nodeId, kind = "milestone") => {
@@ -307,7 +301,7 @@ function App() {
             <input value={quickGoal} onChange={(event) => setQuickGoal(event.target.value)} placeholder="What are we finishing?" />
           </label>
           <button className="primary" type="submit">Create 🏁</button>
-          <button className="ghost" type="button" onClick={loadDemoBoard}>Demo ✨</button>
+          <button className="ghost" type="button" onClick={() => setTutorialOpen(true)}>Tutorial ✨</button>
           <button className="ghost" type="button" onClick={() => setViewport({ x: window.innerWidth / 2 - 400, y: window.innerHeight / 2 - 260, scale: 1 })}>Focus 🔍</button>
         </form>
 
@@ -375,7 +369,6 @@ function App() {
           <div className="emptyState">
             <span>{emoji(0x1f680)}</span>
             <h1>Create your first goal</h1>
-            <button className="primary" onClick={() => createGoal()}>Launch 🚀</button>
           </div>
         )}
 
@@ -527,6 +520,25 @@ function App() {
         </div>
       )}
 
+      {tutorialOpen && (
+        <div className="modalBackdrop" onPointerDown={() => setTutorialOpen(false)}>
+          <section className="tutorialPanel" onPointerDown={(event) => event.stopPropagation()}>
+            <header>
+              <span>{emoji(0x1f9ed)}</span>
+              <div>
+                <h2>StepView Tutorial</h2>
+                <p>Interactive guide content will live here.</p>
+              </div>
+            </header>
+            <div className="tutorialPlaceholder">
+              <strong>Coming soon</strong>
+              <p>This panel will teach goals, milestones, plan milestones, purple links, and journeys without touching your board.</p>
+            </div>
+            <button className="primary" type="button" onClick={() => setTutorialOpen(false)}>Got it</button>
+          </section>
+        </div>
+      )}
+
       {completedGalleryOpen && (
         <div className="galleryBackdrop" onPointerDown={closeCompletedGallery}>
           <section className="completedGallery" onPointerDown={(event) => event.stopPropagation()}>
@@ -605,3 +617,4 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+

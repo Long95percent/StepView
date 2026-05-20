@@ -399,7 +399,7 @@ function App() {
 
   const onWheel = (event) => {
     event.preventDefault();
-    const nextScale = Math.min(1.8, Math.max(0.45, viewport.scale - event.deltaY * 0.001));
+    const nextScale = Math.min(2.6, Math.max(0.08, viewport.scale - event.deltaY * 0.001));
     setViewport((current) => ({ ...current, scale: nextScale }));
   };
 

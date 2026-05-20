@@ -517,14 +517,14 @@ button { cursor: pointer; }
 .linkHandle.right { right: -6px; top: 50%; transform: translateY(-50%); }
 .linkHandle.bottom { left: 50%; bottom: -6px; transform: translateX(-50%); }
 .linkHandle.left { left: -6px; top: 50%; transform: translateY(-50%); }
-.nodeTop { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.nodeTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .nodeEmoji { font-size: 34px; filter: drop-shadow(0 8px 12px rgba(0,0,0,.35)); }
 .node strong { display: block; line-height: 1.25; }
 .node time { display: block; margin-top: 5px; font-size: 12px; }
 .node p { color: #cbd8ee; font-size: 13px; line-height: 1.5; }
 .add {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border: 0;
   border-radius: 50%;
   color: #06111d;
@@ -532,7 +532,7 @@ button { cursor: pointer; }
   box-shadow: 0 0 22px rgba(128, 247, 255, .55);
   font-weight: 800;
 }
-.addGroup { display: flex; gap: 7px; }
+.addGroup { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 104px; }
 .planAdd { background: #b9bdc9; box-shadow: 0 0 18px rgba(185, 189, 201, .35); }
 .branchAdd { background: #8d7cff; box-shadow: 0 0 18px rgba(141, 124, 255, .42); }
 .branchMergeAdd { background: #ff9acb; box-shadow: 0 0 18px rgba(255, 95, 168, .42); }

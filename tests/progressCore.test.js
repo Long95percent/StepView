@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   addCrossTaskLink,
+  addBranch,
+  connectBranchToNode,
   ACHIEVEMENTS,
   addMilestoneAfter,
   addPlanMilestoneAfter,
@@ -9,12 +11,14 @@ import {
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
+  deleteBranch,
   deleteCrossTaskLink,
   deleteTask,
   findNodeInBoard,
   formatCompactDate,
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
+  getBranchSegments,
   getAchievementCollection,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
@@ -79,6 +83,70 @@ describe("progress board core", () => {
     expect(movedNode.tasks[0].nodes[0]).toMatchObject({ x: 42, y: 84 });
     expect(movedSticker.stickers[0]).toMatchObject({ x: 200, y: 220 });
     expect(board.tasks[0].nodes[0].x).not.toBe(42);
+  });
+
+  it("normalizes missing branch data to an empty list", () => {
+    const board = normalizeBoard({ tasks: [], stickers: [] });
+
+    expect(board.branches).toEqual([]);
+  });
+
+  it("creates a branch node without replacing the main path", () => {
+    const task = buildTask("增加支线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = normalizeBoard({ tasks: [task], stickers: [] });
+
+    const branched = addBranch(board, task.nodes[0].id, {
+      type: "lover",
+      anchor: "right-bottom",
+      label: "心动支线",
+      partnerName: "阿晴",
+      now: new Date("2026-05-20T08:00:00Z"),
+    });
+
+    expect(branched.tasks[0].edges).toEqual(task.edges);
+    expect(branched.tasks[0].nodes).toHaveLength(3);
+    expect(branched.tasks[0].nodes[2]).toMatchObject({ branchId: branched.branches[0].id, title: "心动支线", emoji: "💗" });
+    expect(branched.branches[0]).toMatchObject({ type: "lover", fromNodeId: task.nodes[0].id, toNodeId: branched.tasks[0].nodes[2].id, anchor: "right-bottom", partnerName: "阿晴" });
+  });
+
+  it("builds renderable branch segments with branch metadata", () => {
+    const task = buildTask("显示支线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "partner",
+      anchor: "bottom",
+      label: "朋友帮忙",
+      partnerName: "小王",
+    });
+
+    expect(getBranchSegments(board)[0]).toMatchObject({ type: "partner", anchor: "bottom", label: "朋友帮忙", partnerName: "小王" });
+  });
+
+  it("deletes only branch-owned nodes and keeps main path nodes", () => {
+    const task = buildTask("删除支线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "self",
+      label: "临时想法",
+    });
+
+    const deleted = deleteBranch(board, board.branches[0].id);
+
+    expect(deleted.branches).toEqual([]);
+    expect(deleted.tasks[0].edges).toEqual(task.edges);
+    expect(deleted.tasks[0].nodes.map((node) => node.id)).toEqual(task.nodes.map((node) => node.id));
+  });
+
+  it("connects a branch node back to a main path node", () => {
+    const task = buildTask("接回主线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "lover",
+      label: "一起走走",
+    });
+
+    const connected = connectBranchToNode(board, board.branches[0].id, task.nodes[1].id);
+
+    expect(connected.branches[0]).toMatchObject({ mergeToNodeId: task.nodes[1].id });
+    expect(getBranchSegments(connected)).toHaveLength(2);
+    expect(getBranchSegments(connected)[1]).toMatchObject({ type: "lover", isMerge: true });
   });
 
   it("marks connected tasks complete and can restore them", () => {

@@ -441,6 +441,36 @@ button { cursor: pointer; }
   filter: drop-shadow(0 0 10px rgba(196, 142, 255, .42));
   pointer-events: none;
 }
+.edges .branchEdgeHit {
+  stroke: transparent;
+  stroke-width: 18;
+  stroke-dasharray: none;
+  filter: none;
+  pointer-events: stroke;
+}
+.edges .branchEdge {
+  stroke-width: 4;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 10px rgba(124, 92, 255, .42));
+  pointer-events: none;
+}
+.edges .branchEdge.self { stroke: rgba(141, 124, 255, .9); }
+.edges .branchEdge.partner { stroke: rgba(53, 230, 168, .9); }
+.edges .branchEdge.lover { stroke: rgba(255, 95, 168, .95); filter: drop-shadow(0 0 14px rgba(255, 95, 168, .58)); }
+.edges .branchEdge.merge { stroke-dasharray: 8 8; }
+.edges .branchEdge.selected { stroke-width: 6; }
+.edges .branchPreviewEdge { stroke-width: 3.5; stroke-dasharray: 5 8; pointer-events: none; filter: drop-shadow(0 0 12px rgba(255,255,255,.32)); }
+.edges .branchPreviewEdge.self { stroke: rgba(141, 124, 255, .72); }
+.edges .branchPreviewEdge.partner { stroke: rgba(53, 230, 168, .72); }
+.edges .branchPreviewEdge.lover { stroke: rgba(255, 95, 168, .78); }
+.branchLabel {
+  fill: rgba(255,255,255,.86);
+  font-size: 13px;
+  paint-order: stroke;
+  stroke: rgba(8, 13, 31, .9);
+  stroke-width: 4px;
+}
+.branchLabel.lover { fill: #ffd6e8; }
 
 .node {
   position: absolute;
@@ -454,6 +484,7 @@ button { cursor: pointer; }
   transform: translate(-50%, -50%);
   backdrop-filter: blur(18px);
 }
+.node.branchNode { box-shadow: 0 16px 44px rgba(124, 92, 255, .2), inset 0 0 0 1px rgba(255,255,255,.12); }
 .node.finish { border-color: rgba(255, 219, 92, .52); }
 .node.start { border-color: rgba(76, 255, 199, .45); }
 .node.plan-milestone {
@@ -503,6 +534,8 @@ button { cursor: pointer; }
 }
 .addGroup { display: flex; gap: 7px; }
 .planAdd { background: #b9bdc9; box-shadow: 0 0 18px rgba(185, 189, 201, .35); }
+.branchAdd { background: #8d7cff; box-shadow: 0 0 18px rgba(141, 124, 255, .42); }
+.branchMergeAdd { background: #ff9acb; box-shadow: 0 0 18px rgba(255, 95, 168, .42); }
 .node.plan-milestone.completed .planAdd { background: #c48eff; box-shadow: 0 0 22px rgba(196, 142, 255, .48); }
 
 .sticker {
@@ -539,6 +572,67 @@ button { cursor: pointer; }
   backdrop-filter: blur(18px);
 }
 .contextMenu button { border: 0; border-radius: 12px; padding: 12px 16px; color: white; background: rgba(255,255,255,.09); }
+.branchToolbar {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 8;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 18px;
+  background: rgba(13, 18, 38, .88);
+  backdrop-filter: blur(16px);
+}
+.modalHint { margin: -6px 0 0; color: rgba(255,255,255,.68); }
+.branchTypePicker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.branchTypeOption {
+  display: grid;
+  gap: 5px;
+  min-height: 104px;
+  padding: 13px 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  color: rgba(255,255,255,.82);
+  background: linear-gradient(145deg, rgba(255,255,255,.1), rgba(255,255,255,.04));
+  box-shadow: inset 0 1px rgba(255,255,255,.08);
+  cursor: pointer;
+}
+.branchTypeOption span { font-size: 24px; }
+.branchTypeOption strong { font-size: 14px; }
+.branchTypeOption small { color: rgba(255,255,255,.55); line-height: 1.35; }
+.branchTypeOption.selected {
+  border-color: rgba(128, 247, 255, .58);
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 14px 34px rgba(0,0,0,.25), 0 0 24px rgba(128, 247, 255, .18);
+}
+.branchTypeOption.selected.self { background: linear-gradient(145deg, rgba(141, 124, 255, .32), rgba(255,255,255,.06)); }
+.branchTypeOption.selected.partner { background: linear-gradient(145deg, rgba(53, 230, 168, .26), rgba(255,255,255,.06)); }
+.branchTypeOption.selected.lover { background: linear-gradient(145deg, rgba(255, 95, 168, .34), rgba(255, 120, 95, .12)); border-color: rgba(255, 154, 203, .68); }
+.loveRain {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.loveRain span {
+  position: absolute;
+  top: -54px;
+  opacity: 0;
+  filter: drop-shadow(0 10px 14px rgba(255, 95, 168, .28));
+  animation: loveDrop linear forwards;
+}
+@keyframes loveDrop {
+  0% { opacity: 0; transform: translate3d(0, -30px, 0) rotate(0deg) scale(.72); }
+  12% { opacity: 1; }
+  86% { opacity: .95; }
+  100% { opacity: 0; transform: translate3d(var(--drift), calc(100vh + 90px), 0) rotate(var(--spin)) scale(1.05); }
+}
 
 .modalBackdrop {
   position: fixed;

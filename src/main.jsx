@@ -1,20 +1,24 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
 import {
+  addBranch,
   addMilestoneAfter,
   addPlanMilestoneAfter,
   addCrossTaskLink,
   buildTask,
   chooseStoredBoard,
+  connectBranchToNode,
   completeTask,
   createConfettiBurst,
   createEmojiSticker,
+  deleteBranch,
   deleteCrossTaskLink,
   deleteNode,
   deleteTask,
   formatCompactDate,
   getAchievementCollection,
   getCompletedTaskSummary,
+  getBranchSegments,
   getCrossTaskLinkSegments,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
@@ -78,10 +82,13 @@ function App() {
   const [viewport, setViewport] = React.useState({ x: 0, y: 0, scale: 1 });
   const [menu, setMenu] = React.useState(null);
   const [selectedLinkId, setSelectedLinkId] = React.useState(null);
+  const [selectedBranchId, setSelectedBranchId] = React.useState(null);
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [dragState, setDragState] = React.useState(null);
   const [noteDraft, setNoteDraft] = React.useState(null);
+  const [branchDraft, setBranchDraft] = React.useState(null);
   const [linkDrag, setLinkDrag] = React.useState(null);
+  const [branchLinkDrag, setBranchLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
@@ -89,6 +96,7 @@ function App() {
   const [achievementGalleryOpen, setAchievementGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
+  const [loveRain, setLoveRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
@@ -204,6 +212,75 @@ function App() {
     setNoteDraft(null);
   };
 
+  const randomBranchAnchor = () => {
+    const anchors = ["right-top", "right-bottom", "bottom", "left-bottom"];
+    return anchors[Math.floor(Math.random() * anchors.length)];
+  };
+
+  const startBranchDraft = (event, node) => {
+    event.stopPropagation();
+    setBranchDraft({ type: "self", stage: "details", nodeId: node.id, label: "", partnerName: "" });
+    setMenu(null);
+  };
+
+  const saveBranchDraft = (event) => {
+    event.preventDefault();
+    if (!branchDraft) return;
+    updateBoard((current) => addBranch(current, branchDraft.nodeId, {
+      type: branchDraft.type,
+      anchor: randomBranchAnchor(),
+      label: branchDraft.label.trim(),
+      partnerName: branchDraft.partnerName,
+    }));
+    if (branchDraft.type === "lover") {
+      const symbols = ["💗", "💖", "💕", "💘", "✨", "⭐", "🌟", "💫"];
+      setLoveRain(Array.from({ length: 22 }, (_, index) => ({
+        id: `${Date.now()}-${index}`,
+        symbol: symbols[index % symbols.length],
+        left: 4 + Math.random() * 92,
+        delay: Math.random() * .8,
+        duration: 2.4 + Math.random() * 1.5,
+        size: 20 + Math.random() * 18,
+        drift: -70 + Math.random() * 140,
+        spin: -80 + Math.random() * 160,
+      })));
+      window.setTimeout(() => setLoveRain([]), 4600);
+      showToast("心动支线已开启。");
+    } else {
+      showToast("支线已创建。");
+    }
+    setBranchDraft(null);
+  };
+
+  const startBranchLinkDrag = (event, node) => {
+    event.stopPropagation();
+    if (!node.branchId) return;
+    const branch = board.branches.find((candidate) => candidate.id === node.branchId);
+    if (!branch) return;
+    setBranchLinkDrag({ branchId: branch.id, type: branch.type, fromNodeId: node.id, from: { x: node.x, y: node.y }, to: { x: node.x, y: node.y } });
+    showToast("拖到主线节点接回。");
+  };
+
+  const finishBranchLinkDrag = (targetNode) => {
+    if (!branchLinkDrag || branchLinkDrag.fromNodeId === targetNode.id || targetNode.branchId) return false;
+    try {
+      updateBoard((current) => connectBranchToNode(current, branchLinkDrag.branchId, targetNode.id));
+      showToast("支线已接回主线。");
+    } catch (error) {
+      showToast(error.message);
+    }
+    setBranchLinkDrag(null);
+    return true;
+  };
+
+  const deleteSelectedBranch = () => {
+    if (!selectedBranchId) return;
+    if (!confirm("删除这条支线？主线节点会保留。")) return;
+    updateBoard((current) => deleteBranch(current, selectedBranchId));
+    setSelectedBranchId(null);
+    showToast("支线已删除。");
+  };
+
   const clearBoard = () => {
     if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) updateBoard(INITIAL_BOARD);
   };
@@ -222,26 +299,33 @@ function App() {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
         cancelLinkDrag();
+        setBranchLinkDrag(null);
         setSelectedLinkId(null);
+        setSelectedBranchId(null);
+        setBranchDraft(null);
       }
       if ((event.key === "Delete" || event.key === "Backspace") && selectedLinkId) {
         updateBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
         setSelectedLinkId(null);
         showToast("Link deleted.");
       }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedBranchId) {
+        deleteSelectedBranch();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [linkDrag, selectedLinkId, updateBoard]);
+  }, [linkDrag, selectedLinkId, selectedBranchId, updateBoard]);
 
   React.useEffect(() => {
-    if (!linkDrag) return undefined;
+    if (!linkDrag && !branchLinkDrag) return undefined;
     const onPointerMove = (event) => {
       setLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
+      setBranchLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
     };
     window.addEventListener("pointermove", onPointerMove);
     return () => window.removeEventListener("pointermove", onPointerMove);
-  }, [linkDrag, viewport]);
+  }, [linkDrag, branchLinkDrag, viewport]);
 
   const celebrateAt = (position) => {
     const burst = createConfettiBurst(position);
@@ -296,6 +380,10 @@ function App() {
   };
 
   const onPointerMove = (event) => {
+    if (branchLinkDrag) {
+      setBranchLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
+      return;
+    }
     if (linkDrag) {
       setLinkDrag((current) => (current ? { ...current, to: screenToWorld(event, viewport, canvasRef.current) } : current));
       return;
@@ -395,24 +483,29 @@ function App() {
         className="canvas"
         onContextMenu={(event) => {
           event.preventDefault();
-          setMenu({ x: event.clientX, y: event.clientY, world: screenToWorld(event, viewport, canvasRef.current) });
+          setMenu({ type: "canvas", x: event.clientX, y: event.clientY, world: screenToWorld(event, viewport, canvasRef.current) });
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           if (isCanvasPanTarget(event.target)) {
             if (linkDrag) cancelLinkDrag();
+            if (branchLinkDrag) setBranchLinkDrag(null);
             event.currentTarget.setPointerCapture?.(event.pointerId);
             setDragState({ type: "pan", startX: event.clientX - viewport.x, startY: event.clientY - viewport.y });
           }
           setMenu(null);
-          if (isCanvasPanTarget(event.target)) setSelectedLinkId(null);
+          if (isCanvasPanTarget(event.target)) {
+            setSelectedLinkId(null);
+            setSelectedBranchId(null);
+          }
         }}
         onPointerMove={onPointerMove}
         onPointerUp={(event) => {
           setDragState(null);
           if (isCanvasPanTarget(event.target)) cancelLinkDrag();
+          if (isCanvasPanTarget(event.target)) setBranchLinkDrag(null);
         }}
-        onPointerLeave={() => { setDragState(null); cancelLinkDrag(); }}
+        onPointerLeave={() => { setDragState(null); cancelLinkDrag(); setBranchLinkDrag(null); }}
         onWheel={onWheel}
         onDrop={dropEmoji}
         onDragOver={(event) => event.preventDefault()}
@@ -445,7 +538,15 @@ function App() {
                 <line className={`crossTaskEdge ${selectedLinkId === link.id ? "selected" : ""}`} x1={link.x1} y1={link.y1} x2={link.x2} y2={link.y2} markerEnd="url(#crossTaskArrow)" />
               </g>
             ))}
+            {getBranchSegments(board).map((branch) => (
+              <g key={branch.id}>
+                <line className="branchEdgeHit" x1={branch.x1} y1={branch.y1} x2={branch.x2} y2={branch.y2} onPointerDown={(event) => { event.stopPropagation(); setMenu(null); setSelectedLinkId(null); setSelectedBranchId(branch.branchId); }} />
+                <line className={`branchEdge ${branch.type} ${branch.isMerge ? "merge" : ""} ${selectedBranchId === branch.id ? "selected" : ""}`} x1={branch.x1} y1={branch.y1} x2={branch.x2} y2={branch.y2} markerEnd="url(#crossTaskArrow)" />
+                {(branch.partnerName || branch.label) && <text className={`branchLabel ${branch.type}`} x={(branch.x1 + branch.x2) / 2} y={(branch.y1 + branch.y2) / 2 - 10}>{branch.partnerName || branch.label}</text>}
+              </g>
+            ))}
             {linkDrag && <line className="linkPreviewEdge" x1={linkDrag.from.x} y1={linkDrag.from.y} x2={linkDrag.to.x} y2={linkDrag.to.y} />}
+            {branchLinkDrag && <line className={`branchPreviewEdge ${branchLinkDrag.type}`} x1={branchLinkDrag.from.x} y1={branchLinkDrag.from.y} x2={branchLinkDrag.to.x} y2={branchLinkDrag.to.y} />}
           </svg>
 
           {activeTasks.map((task) => (
@@ -453,7 +554,7 @@ function App() {
               {task.nodes.map((node) => (
                 <article
                   key={node.id}
-                  className={`node ${node.kind} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
+                  className={`node ${node.kind} ${node.branchId ? "branchNode" : ""} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${branchLinkDrag && !node.branchId ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
                   style={{ left: node.x, top: node.y }}
                   onPointerDown={(event) => startPointerDrag(event, "node", node.id)}
                   onClick={(event) => {
@@ -461,6 +562,11 @@ function App() {
                     setSelectedNodeId((id) => (id === node.id ? null : node.id));
                   }}
                   onPointerUp={(event) => {
+                    if (branchLinkDrag) {
+                      event.stopPropagation();
+                      finishBranchLinkDrag(node);
+                      return;
+                    }
                     if (!linkDrag) return;
                     event.stopPropagation();
                     finishLinkDrag(node);
@@ -477,6 +583,8 @@ function App() {
                       <div className="addGroup">
                         <button className="add" title="Add milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id); }}>+</button>
                         <button className="add planAdd" title="Add plan milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id, "plan-milestone"); }}>＋</button>
+                        <button className="add branchAdd" title="创建支线" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => startBranchDraft(event, node)}>⑂</button>
+                        {node.branchId && <button className="add branchMergeAdd" title="接回主线：按住拖到主线节点" onPointerDown={(event) => startBranchLinkDrag(event, node)} onClick={(event) => event.stopPropagation()}>↩</button>}
                       </div>
                     )}
                   </div>
@@ -553,8 +661,14 @@ function App() {
           </div>
         )}
         {menu && (
-          <div className="contextMenu" style={{ left: menu.x, top: menu.y }}>
-            <button onClick={() => createGoal(menu.world)}>Create goal here {emoji(0x1f3c1)}</button>
+          <div className="contextMenu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()}>
+            {menu.type === "canvas" && <button onClick={() => createGoal(menu.world)}>Create goal here {emoji(0x1f3c1)}</button>}
+          </div>
+        )}
+
+        {selectedBranchId && (
+          <div className="branchToolbar" onPointerDown={(event) => event.stopPropagation()}>
+            <button className="danger" type="button" onClick={deleteSelectedBranch}>删除选中支线 🗑️</button>
           </div>
         )}
 
@@ -569,6 +683,51 @@ function App() {
             <label>Time<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
             <div className="modalActions"><button type="button" onClick={() => setNoteDraft(null)}>Cancel</button><button className="primary">Save ✅</button></div>
           </form>
+        </div>
+      )}
+
+      {branchDraft?.stage === "details" && (
+        <div className="modalBackdrop" onPointerDown={() => setBranchDraft(null)}>
+          <form className="modal" onSubmit={saveBranchDraft} onPointerDown={(event) => event.stopPropagation()}>
+            <h2>⑂ 创建支线</h2>
+            <div className="branchTypePicker" role="radiogroup" aria-label="支线类型">
+              {[
+                ["self", "🧭", "我的分支", "自己的备用路线"],
+                ["partner", "🤝", "伙伴支线", "朋友或队友参与"],
+                ["lover", "💗", "恋人支线", "心动路线和彩蛋"],
+              ].map(([type, icon, title, detail]) => (
+                <button key={type} type="button" className={`branchTypeOption ${branchDraft.type === type ? "selected" : ""} ${type}`} onClick={() => setBranchDraft({ ...branchDraft, type })}>
+                  <span>{icon}</span>
+                  <strong>{title}</strong>
+                  <small>{detail}</small>
+                </button>
+              ))}
+            </div>
+            {branchDraft.type === "lover" && <p className="modalHint">要不要开一条只属于 TA 的路线？</p>}
+            <label>支线名称<input autoFocus required value={branchDraft.label} onChange={(event) => setBranchDraft({ ...branchDraft, label: event.target.value })} /></label>
+            {branchDraft.type !== "self" && <label>{branchDraft.type === "lover" ? "昵称" : "伙伴名字"}<input value={branchDraft.partnerName} onChange={(event) => setBranchDraft({ ...branchDraft, partnerName: event.target.value })} /></label>}
+            <div className="modalActions"><button type="button" onClick={() => setBranchDraft(null)}>Cancel</button><button className="primary">Create ✨</button></div>
+          </form>
+        </div>
+      )}
+
+      {loveRain.length > 0 && (
+        <div className="loveRain" aria-hidden="true">
+          {loveRain.map((drop) => (
+            <span
+              key={drop.id}
+              style={{
+                left: `${drop.left}%`,
+                animationDelay: `${drop.delay}s`,
+                animationDuration: `${drop.duration}s`,
+                fontSize: `${drop.size}px`,
+                "--drift": `${drop.drift}px`,
+                "--spin": `${drop.spin}deg`,
+              }}
+            >
+              {drop.symbol}
+            </span>
+          ))}
         </div>
       )}
 

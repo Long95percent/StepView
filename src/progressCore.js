@@ -1,4 +1,6 @@
 const HORIZONTAL_GAP = 280;
+const BRANCH_GAP_X = 220;
+const BRANCH_GAP_Y = 150;
 
 const icon = (codePoint) => String.fromCodePoint(codePoint);
 const makeId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
@@ -19,11 +21,25 @@ export const ACHIEVEMENTS = {
   },
 };
 
+export const BRANCH_TYPES = {
+  self: { emoji: "🧭", label: "我的分支" },
+  partner: { emoji: "🤝", label: "伙伴支线" },
+  lover: { emoji: "💗", label: "心动支线" },
+};
+
+const BRANCH_ANCHOR_OFFSETS = {
+  "right-top": { x: BRANCH_GAP_X, y: -BRANCH_GAP_Y },
+  "right-bottom": { x: BRANCH_GAP_X, y: BRANCH_GAP_Y },
+  bottom: { x: 0, y: BRANCH_GAP_Y },
+  "left-bottom": { x: -BRANCH_GAP_X, y: BRANCH_GAP_Y },
+};
+
 export function normalizeBoard(value) {
   return {
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
     links: Array.isArray(value?.links) ? value.links : [],
+    branches: Array.isArray(value?.branches) ? value.branches : [],
     achievements: Array.isArray(value?.achievements) ? value.achievements : [],
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
@@ -44,7 +60,7 @@ export function getAchievementCollection(board) {
 }
 
 export function hasBoardContent(board) {
-  return board.tasks.length > 0 || board.stickers.length > 0;
+  return board.tasks.length > 0 || board.stickers.length > 0 || (board.branches || []).length > 0;
 }
 
 export function chooseStoredBoard(primaryBoard, backupBoard) {
@@ -141,6 +157,92 @@ export function deleteCrossTaskLink(board, linkId) {
   return { ...board, links: (board.links || []).filter((link) => link.id !== linkId) };
 }
 
+function getBranchType(type) {
+  return BRANCH_TYPES[type] ? type : "self";
+}
+
+function getBranchPosition(sourceNode, anchor) {
+  const offset = BRANCH_ANCHOR_OFFSETS[anchor] || BRANCH_ANCHOR_OFFSETS["right-bottom"];
+  return { x: sourceNode.x + offset.x, y: sourceNode.y + offset.y };
+}
+
+export function addBranch(board, fromNodeId, options = {}) {
+  const normalized = normalizeBoard(board);
+  const fromNode = findNodeInBoard(normalized, fromNodeId);
+  if (!fromNode) throw new Error("Node not found.");
+
+  const type = getBranchType(options.type);
+  const typeConfig = BRANCH_TYPES[type];
+  const branchId = makeId("branch");
+  const branchNodeId = makeId("node");
+  const anchor = options.anchor || "right-bottom";
+  const position = getBranchPosition(fromNode, anchor);
+  const timestamp = (options.now || new Date()).toISOString();
+  const label = (options.label || typeConfig.label).trim();
+  const branchNode = {
+    id: branchNodeId,
+    taskId: fromNode.taskId,
+    branchId,
+    kind: "milestone",
+    emoji: typeConfig.emoji,
+    title: label,
+    detail: type === "lover" ? "心动支线已开启。" : "",
+    timestamp,
+    x: position.x,
+    y: position.y,
+  };
+
+  return {
+    ...normalized,
+    tasks: normalized.tasks.map((task) =>
+      task.id === fromNode.taskId ? { ...task, nodes: [...task.nodes, branchNode] } : task,
+    ),
+    branches: [
+      ...normalized.branches,
+      {
+        id: branchId,
+        taskId: fromNode.taskId,
+        type,
+        fromNodeId,
+        toNodeId: branchNodeId,
+        mergeToNodeId: null,
+        anchor,
+        label,
+        partnerName: options.partnerName || "",
+        createdAt: timestamp,
+      },
+    ],
+  };
+}
+
+export function deleteBranch(board, branchId) {
+  const normalized = normalizeBoard(board);
+  const branchNodeIds = new Set(
+    normalized.tasks.flatMap((task) => task.nodes.filter((node) => node.branchId === branchId).map((node) => node.id)),
+  );
+  return {
+    ...normalized,
+    branches: normalized.branches.filter((branch) => branch.id !== branchId),
+    tasks: normalized.tasks.map((task) => ({
+      ...task,
+      nodes: task.nodes.filter((node) => !branchNodeIds.has(node.id)),
+    })),
+  };
+}
+
+export function connectBranchToNode(board, branchId, targetNodeId) {
+  const normalized = normalizeBoard(board);
+  const branch = normalized.branches.find((candidate) => candidate.id === branchId);
+  const targetNode = findNodeInBoard(normalized, targetNodeId);
+  if (!branch || !targetNode) throw new Error("Branch target not found.");
+  return {
+    ...normalized,
+    branches: normalized.branches.map((candidate) =>
+      candidate.id === branchId ? { ...candidate, mergeToNodeId: targetNodeId } : candidate,
+    ),
+  };
+}
+
 export function getCrossTaskLinkSegments(board) {
   return (board.links || []).flatMap((link) => {
     const fromNode = findNodeInBoard(board, link.fromNodeId);
@@ -155,6 +257,42 @@ export function getCrossTaskLinkSegments(board) {
         y1: fromNode.y,
         x2: toNode.x,
         y2: toNode.y,
+      },
+    ];
+  });
+}
+
+export function getBranchSegments(board) {
+  const normalized = normalizeBoard(board);
+  return normalized.branches.flatMap((branch) => {
+    const fromNode = findNodeInBoard(normalized, branch.fromNodeId);
+    const toNode = findNodeInBoard(normalized, branch.toNodeId);
+    if (!fromNode || !toNode) return [];
+    const branchSegment =
+      {
+        id: branch.id,
+        branchId: branch.id,
+        type: branch.type,
+        anchor: branch.anchor,
+        label: branch.label,
+        partnerName: branch.partnerName,
+        x1: fromNode.x,
+        y1: fromNode.y,
+        x2: toNode.x,
+        y2: toNode.y,
+      };
+    const mergeNode = branch.mergeToNodeId ? findNodeInBoard(normalized, branch.mergeToNodeId) : null;
+    if (!mergeNode) return [branchSegment];
+    return [
+      branchSegment,
+      {
+        ...branchSegment,
+        id: `${branch.id}-merge`,
+        x1: toNode.x,
+        y1: toNode.y,
+        x2: mergeNode.x,
+        y2: mergeNode.y,
+        isMerge: true,
       },
     ];
   });

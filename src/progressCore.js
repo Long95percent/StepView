@@ -1,6 +1,8 @@
 const HORIZONTAL_GAP = 280;
 const BRANCH_GAP_X = 220;
 const BRANCH_GAP_Y = 150;
+const MIN_VIEWPORT_SCALE = 0.08;
+const MAX_VIEWPORT_SCALE = 2.6;
 
 const icon = (codePoint) => String.fromCodePoint(codePoint);
 const makeId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
@@ -13,11 +15,119 @@ export const ICONS = {
 };
 
 export const ACHIEVEMENTS = {
+  firstGoal: {
+    id: "first-goal",
+    emoji: "✨",
+    title: "First Spark",
+    detail: "Created your first goal on the canvas.",
+  },
+  firstMilestone: {
+    id: "first-milestone",
+    emoji: "🛤️",
+    title: "Trail Builder",
+    detail: "Added the first milestone to a journey.",
+  },
+  firstPlanMilestone: {
+    id: "first-plan-milestone",
+    emoji: "📝",
+    title: "Future Me",
+    detail: "Planned a future milestone before it happened.",
+  },
+  firstPlanComplete: {
+    id: "first-plan-complete",
+    emoji: "✅",
+    title: "Promise Keeper",
+    detail: "Completed a planned milestone.",
+  },
+  firstKeyNode: {
+    id: "first-key-node",
+    emoji: "🌟",
+    title: "Key Moment",
+    detail: "Marked a node as a glowing key moment.",
+  },
   firstCrossTaskLink: {
     id: "first-cross-task-link",
     emoji: "🕸️",
     title: "Web Weaver",
     detail: "Connected two goals with a purple thread.",
+  },
+  firstBranch: {
+    id: "first-branch",
+    emoji: "🧭",
+    title: "Branch Explorer",
+    detail: "Opened your first side branch.",
+  },
+  firstBranchExtension: {
+    id: "first-branch-extension",
+    emoji: "🎒",
+    title: "Side Quest Hero",
+    detail: "Extended a branch with another step.",
+  },
+  firstBranchMerge: {
+    id: "first-branch-merge",
+    emoji: "🔁",
+    title: "Full Circle",
+    detail: "Merged a branch back into the main journey.",
+  },
+  firstCompletion: {
+    id: "first-completion",
+    emoji: "🏁",
+    title: "Victory Lap",
+    detail: "Completed your first goal.",
+  },
+  constellationMaker: {
+    id: "constellation-maker",
+    emoji: "🌌",
+    title: "Constellation Maker",
+    detail: "Marked five key moments until the canvas looked like a star map.",
+  },
+  purpleRain: {
+    id: "purple-rain",
+    emoji: "☔",
+    title: "Purple Rain",
+    detail: "Created three cross-goal purple links.",
+  },
+  gardenPath: {
+    id: "garden-path",
+    emoji: "🌼",
+    title: "Garden Path",
+    detail: "Decorated the board with ten stickers.",
+  },
+  tinyUniverse: {
+    id: "tiny-universe",
+    emoji: "🪐",
+    title: "Tiny Universe",
+    detail: "Built a board with goals, stickers, branches, and cross-goal links.",
+  },
+  memoryKeeper: {
+    id: "memory-keeper",
+    emoji: "📚",
+    title: "Memory Keeper",
+    detail: "Completed a journey with at least five nodes.",
+  },
+  noLooseEnds: {
+    id: "no-loose-ends",
+    emoji: "🪢",
+    title: "No Loose Ends",
+    detail: "Completed a goal that had both a branch merge and a cross-goal link.",
+  },
+  signal520: {
+    id: "520-signal",
+    emoji: "💗",
+    title: "520 Signal",
+    detail: "Opened a lover branch on May 20.",
+  },
+  midnightBuilder: {
+    id: "midnight-builder",
+    emoji: "🌙",
+    title: "Midnight Builder",
+    detail: "Created a node after midnight.",
+  },
+  luckySeven: {
+    id: "lucky-seven",
+    emoji: "🍀",
+    title: "Lucky Seven",
+    detail: "Completed a goal with exactly seven nodes.",
   },
 };
 
@@ -45,6 +155,10 @@ export function normalizeBoard(value) {
   };
 }
 
+export function getNextViewportScale(currentScale, deltaY) {
+  return Math.min(MAX_VIEWPORT_SCALE, Math.max(MIN_VIEWPORT_SCALE, currentScale - deltaY * 0.001));
+}
+
 export function getNewlyUnlockedAchievements(previousBoard, nextBoard) {
   const previous = new Set(previousBoard.achievements || []);
   const next = new Set(nextBoard.achievements || []);
@@ -57,6 +171,60 @@ export function getAchievementCollection(board) {
     ...achievement,
     unlocked: unlocked.has(achievement.id),
   }));
+}
+
+function appendAchievement(achievementIds, achievement, condition) {
+  if (!condition || achievementIds.includes(achievement.id)) return achievementIds;
+  return [...achievementIds, achievement.id];
+}
+
+function isMay20(value) {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.getMonth() === 4 && date.getDate() === 20;
+}
+
+function isMidnightHour(value) {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.getHours() === 0;
+}
+
+export function unlockBoardAchievements(board) {
+  const normalized = normalizeBoard(board);
+  const nodes = normalized.tasks.flatMap((task) => task.nodes || []);
+  const branches = normalized.branches || [];
+  const crossTaskLinks = (normalized.links || []).filter((link) => link.kind === "cross-task");
+  const branchTaskIds = new Set(branches.map((branch) => branch.taskId));
+  const mergedBranchTaskIds = new Set(branches.filter((branch) => branch.mergeToNodeId).map((branch) => branch.taskId));
+  const linkedTaskIds = new Set(crossTaskLinks.flatMap((link) => [link.fromTaskId, link.toTaskId]));
+  let achievements = normalized.achievements || [];
+
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstGoal, normalized.tasks.length > 0);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstMilestone, nodes.some((node) => node.kind === "milestone"));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstPlanMilestone, nodes.some((node) => node.kind === "plan-milestone"));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstPlanComplete, nodes.some((node) => node.kind === "plan-milestone" && node.status === "completed"));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstKeyNode, nodes.some((node) => node.isKeyNode));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstCrossTaskLink, crossTaskLinks.length > 0);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstBranch, branches.length > 0);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstBranchExtension, nodes.some((node) => node.branchId && node.previousBranchNodeId));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstBranchMerge, branches.some((branch) => branch.mergeToNodeId));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.firstCompletion, normalized.tasks.some((task) => task.status === "completed"));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.constellationMaker, nodes.filter((node) => node.isKeyNode).length >= 5);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.purpleRain, crossTaskLinks.length >= 3);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.gardenPath, normalized.stickers.length >= 10);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.tinyUniverse, normalized.tasks.length > 0 && normalized.stickers.length > 0 && branches.length > 0 && crossTaskLinks.length > 0);
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.memoryKeeper, normalized.tasks.some((task) => task.status === "completed" && task.nodes.length >= 5));
+  achievements = appendAchievement(
+    achievements,
+    ACHIEVEMENTS.noLooseEnds,
+    normalized.tasks.some((task) => task.status === "completed" && mergedBranchTaskIds.has(task.id) && (linkedTaskIds.has(task.id) || branchTaskIds.has(task.id) && crossTaskLinks.length > 0)),
+  );
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.signal520, branches.some((branch) => branch.type === "lover" && isMay20(branch.createdAt)));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.midnightBuilder, nodes.some((node) => isMidnightHour(node.timestamp)));
+  achievements = appendAchievement(achievements, ACHIEVEMENTS.luckySeven, normalized.tasks.some((task) => task.status === "completed" && task.nodes.length === 7));
+
+  return { ...normalized, achievements };
 }
 
 export function hasBoardContent(board) {

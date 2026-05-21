@@ -89,7 +89,29 @@ button { cursor: pointer; }
 .done { margin-top: 12px; padding: 9px 11px; font-size: 12px; }
 .danger { margin-top: 8px; padding: 8px 11px; background: rgba(255, 84, 116, .18); box-shadow: none; }
 
-.emojiGrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; max-height: 220px; overflow-y: auto; padding-right: 4px; }
+.emojiTabs {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.emojiTabs button {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 14px;
+  color: rgba(255, 255, 255, .68);
+  background: rgba(255, 255, 255, .06);
+  padding: 7px 4px;
+}
+.emojiTabs button span { display: block; font-size: 18px; line-height: 1; }
+.emojiTabs button small { display: block; margin-top: 3px; font-size: 10px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.emojiTabs button.active {
+  color: #ffffff;
+  border-color: rgba(128, 247, 255, .5);
+  background: linear-gradient(145deg, rgba(109, 92, 255, .34), rgba(0, 212, 255, .16));
+  box-shadow: 0 0 18px rgba(0, 212, 255, .18);
+}
+.emojiGrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; max-height: 260px; overflow-y: auto; padding-right: 4px; }
 .emojiGrid button {
   height: 39px;
   border: 1px solid rgba(255, 255, 255, .12);

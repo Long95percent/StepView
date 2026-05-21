@@ -21,9 +21,11 @@ import {
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
   getBranchSegments,
+  getNextViewportScale,
   getTaskBranchEntries,
   getAchievementCollection,
   getNewlyUnlockedAchievements,
+  unlockBoardAchievements,
   getTaskProcessEntries,
   getUnifiedEdges,
   hasBoardContent,
@@ -87,6 +89,13 @@ describe("progress board core", () => {
     expect(movedNode.tasks[0].nodes[0]).toMatchObject({ x: 42, y: 84 });
     expect(movedSticker.stickers[0]).toMatchObject({ x: 200, y: 220 });
     expect(board.tasks[0].nodes[0].x).not.toBe(42);
+  });
+
+  it("calculates canvas zoom from the latest scale and clamps the result", () => {
+    expect(getNextViewportScale(1, 100)).toBeCloseTo(0.9);
+    expect(getNextViewportScale(0.9, 100)).toBeCloseTo(0.8);
+    expect(getNextViewportScale(0.1, 1000)).toBe(0.08);
+    expect(getNextViewportScale(2.5, -1000)).toBe(2.6);
   });
 
   it("toggles a key node flag without mutating the original board", () => {
@@ -253,16 +262,152 @@ describe("progress board core", () => {
     expect(getNewlyUnlockedAchievements(linked, alreadyUnlocked)).toEqual([]);
   });
 
+  it("unlocks foundational achievements from board content", () => {
+    const task = buildTask("成就系统", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const withMilestone = addMilestoneAfter(task, task.nodes[0].id, {
+      title: "第一个里程碑",
+      detail: "",
+      timestamp: "2026-05-18T10:00:00.000Z",
+    });
+    const withPlan = addPlanMilestoneAfter(withMilestone, withMilestone.nodes[1].id, {
+      title: "未来计划",
+      detail: "",
+      timestamp: "2026-05-18T11:00:00.000Z",
+    });
+    const completedPlan = togglePlanMilestoneComplete(withPlan, withPlan.nodes[2].id, new Date("2026-05-18T12:00:00Z"));
+    const board = normalizeBoard({ tasks: [completedPlan], stickers: [] });
+
+    const unlocked = unlockBoardAchievements(board);
+
+    expect(unlocked.achievements).toEqual(expect.arrayContaining([
+      ACHIEVEMENTS.firstGoal.id,
+      ACHIEVEMENTS.firstMilestone.id,
+      ACHIEVEMENTS.firstPlanMilestone.id,
+      ACHIEVEMENTS.firstPlanComplete.id,
+    ]));
+  });
+
+  it("unlocks key node, branch, branch extension, branch merge, and first completion achievements", () => {
+    const task = buildTask("支线成就", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const keyBoard = toggleKeyNode(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id);
+    const branched = addBranch(keyBoard, task.nodes[0].id, { type: "self", label: "探索支线" });
+    const extended = addBranchMilestoneAfter(branched, branched.branches[0].id, branched.branches[0].toNodeId, {
+      title: "支线第二步",
+    });
+    const merged = connectBranchToNode(extended, extended.branches[0].id, task.nodes[1].id);
+    const completed = completeTask(merged, task.id, new Date("2026-05-18T13:00:00Z"));
+
+    const unlocked = unlockBoardAchievements(completed);
+
+    expect(unlocked.achievements).toEqual(expect.arrayContaining([
+      ACHIEVEMENTS.firstKeyNode.id,
+      ACHIEVEMENTS.firstBranch.id,
+      ACHIEVEMENTS.firstBranchExtension.id,
+      ACHIEVEMENTS.firstBranchMerge.id,
+      ACHIEVEMENTS.firstCompletion.id,
+    ]));
+  });
+
+  it("unlocks counting achievements for stars, purple links, stickers, and complete journeys", () => {
+    const tasks = Array.from({ length: 4 }, (_, index) =>
+      buildTask(`目标 ${index + 1}`, { x: 800 + index * 320, y: 420 }, new Date("2026-05-18T09:30:00Z")),
+    );
+    const keyNodes = tasks[0].nodes.map((node) => ({ ...node, isKeyNode: true }));
+    const extraKeyNodes = Array.from({ length: 3 }, (_, index) => ({
+      ...tasks[0].nodes[1],
+      id: `key-extra-${index}`,
+      kind: "milestone",
+      title: `关键 ${index + 1}`,
+      isKeyNode: true,
+    }));
+    const board = normalizeBoard({
+      tasks: [
+        { ...tasks[0], status: "completed", nodes: [...keyNodes, ...extraKeyNodes] },
+        tasks[1],
+        tasks[2],
+        tasks[3],
+      ],
+      stickers: Array.from({ length: 10 }, (_, index) => createEmojiSticker("🌼", { x: index * 10, y: index * 12 })),
+      links: [
+        { id: "link-1", fromTaskId: tasks[0].id, fromNodeId: tasks[0].nodes[1].id, toTaskId: tasks[1].id, toNodeId: tasks[1].nodes[0].id, kind: "cross-task" },
+        { id: "link-2", fromTaskId: tasks[1].id, fromNodeId: tasks[1].nodes[1].id, toTaskId: tasks[2].id, toNodeId: tasks[2].nodes[0].id, kind: "cross-task" },
+        { id: "link-3", fromTaskId: tasks[2].id, fromNodeId: tasks[2].nodes[1].id, toTaskId: tasks[3].id, toNodeId: tasks[3].nodes[0].id, kind: "cross-task" },
+      ],
+    });
+
+    const unlocked = unlockBoardAchievements(board);
+
+    expect(unlocked.achievements).toEqual(expect.arrayContaining([
+      ACHIEVEMENTS.constellationMaker.id,
+      ACHIEVEMENTS.purpleRain.id,
+      ACHIEVEMENTS.gardenPath.id,
+      ACHIEVEMENTS.memoryKeeper.id,
+    ]));
+  });
+
+  it("unlocks tiny universe and no loose ends combination achievements", () => {
+    const task = buildTask("组合成就", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const branched = addBranch(normalizeBoard({ tasks: [task], stickers: [createEmojiSticker("🪐", { x: 0, y: 0 })] }), task.nodes[0].id, {
+      type: "self",
+      label: "组合支线",
+    });
+    const merged = connectBranchToNode(branched, branched.branches[0].id, task.nodes[1].id);
+    const linked = {
+      ...merged,
+      links: [{ id: "link-1", fromTaskId: task.id, fromNodeId: task.nodes[0].id, toTaskId: "other-task", toNodeId: "other-node", kind: "cross-task" }],
+    };
+    const completed = completeTask(linked, task.id, new Date("2026-05-18T13:00:00Z"));
+
+    const unlocked = unlockBoardAchievements(completed);
+
+    expect(unlocked.achievements).toEqual(expect.arrayContaining([
+      ACHIEVEMENTS.tinyUniverse.id,
+      ACHIEVEMENTS.noLooseEnds.id,
+    ]));
+  });
+
+  it("unlocks easter egg achievements for 520, midnight work, and lucky seven", () => {
+    const loverTask = buildTask("520 彩蛋", { x: 800, y: 420 }, new Date("2026-05-18T09:30:00Z"));
+    const loverBranch = addBranch(normalizeBoard({ tasks: [loverTask], stickers: [] }), loverTask.nodes[0].id, {
+      type: "lover",
+      label: "心动支线",
+      now: new Date("2026-05-20T08:00:00Z"),
+    });
+    const midnightTask = addMilestoneAfter(loverBranch.tasks[0], loverTask.nodes[0].id, {
+      title: "夜里继续",
+      detail: "",
+      timestamp: "2026-05-21T00:30:00",
+    });
+    const luckySevenTask = Array.from({ length: 5 }).reduce(
+      (currentTask, _, index) => addMilestoneAfter(currentTask, currentTask.nodes.at(-2).id, {
+        title: `幸运节点 ${index + 1}`,
+        detail: "",
+        timestamp: `2026-05-21T0${index + 1}:00:00.000Z`,
+      }),
+      buildTask("七节点完成", { x: 1200, y: 420 }, new Date("2026-05-18T09:30:00Z")),
+    );
+    const completedLuckySeven = completeTask({ tasks: [luckySevenTask], stickers: [] }, luckySevenTask.id, new Date("2026-05-21T08:00:00Z")).tasks[0];
+    const board = normalizeBoard({ tasks: [midnightTask, completedLuckySeven], stickers: [], branches: loverBranch.branches });
+
+    const unlocked = unlockBoardAchievements(board);
+
+    expect(unlocked.achievements).toEqual(expect.arrayContaining([
+      ACHIEVEMENTS.signal520.id,
+      ACHIEVEMENTS.midnightBuilder.id,
+      ACHIEVEMENTS.luckySeven.id,
+    ]));
+  });
+
   it("builds an achievement collection with unlocked status", () => {
     const board = normalizeBoard({ achievements: [ACHIEVEMENTS.firstCrossTaskLink.id] });
 
-    expect(getAchievementCollection(board)).toEqual([
+    expect(getAchievementCollection(board)).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: ACHIEVEMENTS.firstCrossTaskLink.id,
         title: ACHIEVEMENTS.firstCrossTaskLink.title,
         unlocked: true,
       }),
-    ]);
+    ]));
   });
 
   it("rejects same-task links", () => {

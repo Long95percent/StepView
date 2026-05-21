@@ -1,5 +1,6 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
+import { EMOJI_CATEGORIES, getEmojiCategory } from "./emojiLibrary";
 import {
   addBranch,
   addBranchMilestoneAfter,
@@ -24,39 +25,19 @@ import {
   getTaskBranchEntries,
   getCrossTaskLinkSegments,
   getNewlyUnlockedAchievements,
+  getNextViewportScale,
   getTaskProcessEntries,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
   toggleKeyNode,
   togglePlanMilestoneComplete,
+  unlockBoardAchievements,
 } from "./progressCore";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
 const emoji = (codePoint) => String.fromCodePoint(codePoint);
-const EMOJI_LIBRARY = [
-  0x2728, 0x1f525, 0x1f308, 0x1f4a1, 0x1f3af, 0x1f9e0, 0x2615, 0x1f9e9, 0x1f319, 0x1f48e,
-  0x1f6a7, 0x1f389, 0x1f680, 0x1f3c1, 0x1f4cd, 0x2705, 0x2b50, 0x1f31f, 0x26a1, 0x1f4ab,
-  0x1f52e, 0x1fa84, 0x1f9ed, 0x1f5fa, 0x1f4cc, 0x1f4ce, 0x1f4dd, 0x1f4da, 0x1f4e6, 0x1f6e0,
-  0x2699, 0x1f527, 0x1f50d, 0x1f510, 0x1f9ea, 0x1f9ec, 0x1f4ca, 0x1f4c8, 0x1f4b0, 0x1f3c6,
-  0x1f947, 0x1f396, 0x1f3a8, 0x1f3a7, 0x1f3ae, 0x1f579, 0x1f340, 0x1f331, 0x1f333, 0x1f30a,
-  0x2601, 0x2600, 0x1f324, 0x1f30d, 0x1fa90, 0x1f30c, 0x1f431, 0x1f436, 0x1f43c, 0x1f98a,
-  0x1f433, 0x1f984, 0x1f34e, 0x1f355, 0x1f354, 0x1f370, 0x1f37a, 0x1f3e0, 0x1f3e2, 0x1f6f8,
-  0x1f697, 0x2708, 0x23f0, 0x1f5d3, 0x2764, 0x1f49c, 0x1f499, 0x1f5a4, 0x1f4a5, 0x1f441,
-  0x1f9f2, 0x1f9f1, 0x1f4f8, 0x1f3ac, 0x1f3b5, 0x1f50b, 0x1f6a6, 0x1f9f0, 0x1f6e1, 0x1f5dd,
-  0x1f600, 0x1f601, 0x1f602, 0x1f923, 0x1f603, 0x1f604, 0x1f605, 0x1f606, 0x1f609, 0x1f60a,
-  0x1f60b, 0x1f60e, 0x1f60d, 0x1f970, 0x1f618, 0x1f617, 0x1f914, 0x1f928, 0x1f610, 0x1f611,
-  0x1f636, 0x1f644, 0x1f60f, 0x1f623, 0x1f625, 0x1f62e, 0x1f910, 0x1f62f, 0x1f62a, 0x1f62b,
-  0x1f971, 0x1f634, 0x1f60c, 0x1f61b, 0x1f61c, 0x1f92a, 0x1f973, 0x1f978, 0x1f97a, 0x1f979,
-  0x1f62d, 0x1f631, 0x1f621, 0x1f624, 0x1f92f, 0x1f976, 0x1f975, 0x1f635, 0x1f974, 0x1f922,
-  0x1f337, 0x1f338, 0x1f339, 0x1f33a, 0x1f33b, 0x1f33c, 0x1f341, 0x1f342, 0x1f343, 0x1fab4,
-  0x1f334, 0x1f335, 0x1f344, 0x1fab5, 0x1fab7, 0x1f490, 0x1f407, 0x1f43f, 0x1f994, 0x1f98c,
-  0x1f987, 0x1f43a, 0x1f42f, 0x1f981, 0x1f42e, 0x1f437, 0x1f438, 0x1f435, 0x1f414, 0x1f427,
-  0x1f426, 0x1f986, 0x1f989, 0x1f98b, 0x1f41d, 0x1f41e, 0x1f40c, 0x1f41f, 0x1f420, 0x1f422,
-  0x1f40d, 0x1f419, 0x1f980, 0x1f99e, 0x1f9a6, 0x1f9a5, 0x1f99c, 0x1f3d5, 0x1f3e1, 0x1f3d6,
-  0x26f2, 0x1f5fb, 0x1f3a1, 0x1f3a0, 0x1f3aa, 0x1f3d9, 0x1f6d6, 0x1f6cb, 0x1f6cf, 0x1f9f8,
-].map(emoji);
 const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
 const desktopApi = window.stepview;
 
@@ -102,6 +83,7 @@ function App() {
   const [confetti, setConfetti] = React.useState([]);
   const [loveRain, setLoveRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
+  const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
 
@@ -164,7 +146,13 @@ function App() {
 
   const updateBoard = React.useCallback((updater) => {
     setBoard((current) => {
-      const nextBoard = typeof updater === "function" ? updater(current) : updater;
+      const rawNextBoard = typeof updater === "function" ? updater(current) : updater;
+      const nextBoard = unlockBoardAchievements(rawNextBoard);
+      const [achievement] = getNewlyUnlockedAchievements(current, nextBoard);
+      if (achievement) {
+        setAchievementPopup(achievement);
+        window.setTimeout(() => setAchievementPopup(null), 3600);
+      }
       if (isLoaded) persistBoard(nextBoard);
       return nextBoard;
     });
@@ -172,6 +160,7 @@ function App() {
 
   const activeTasks = board.tasks.filter((task) => task.status === "active");
   const completedTasks = board.tasks.filter((task) => task.status === "completed");
+  const activeEmojiCategory = getEmojiCategory(emojiCategoryId);
   const achievementCollection = getAchievementCollection(board);
   const unlockedAchievements = achievementCollection.filter((achievement) => achievement.unlocked);
   const selectedCompletedTask = completedTasks.find((task) => task.id === selectedCompletedTaskId);
@@ -379,12 +368,7 @@ function App() {
     if (!linkDrag || linkDrag.nodeId === targetNode.id) return false;
     try {
       const nextBoard = addCrossTaskLink(board, linkDrag.nodeId, targetNode.id, new Date());
-      const [achievement] = getNewlyUnlockedAchievements(board, nextBoard);
       updateBoard(nextBoard);
-      if (achievement) {
-        setAchievementPopup(achievement);
-        window.setTimeout(() => setAchievementPopup(null), 3600);
-      }
       showToast("Link created.");
     } catch (error) {
       showToast(error.message);
@@ -426,8 +410,7 @@ function App() {
 
   const onWheel = (event) => {
     event.preventDefault();
-    const nextScale = Math.min(2.6, Math.max(0.08, viewport.scale - event.deltaY * 0.001));
-    setViewport((current) => ({ ...current, scale: nextScale }));
+    setViewport((current) => ({ ...current, scale: getNextViewportScale(current.scale, event.deltaY) }));
   };
 
   const dropEmoji = (event) => {
@@ -460,8 +443,22 @@ function App() {
 
         <section>
           <h2>🧩 Stickers</h2>
+          <div className="emojiTabs" aria-label="Sticker categories">
+            {EMOJI_CATEGORIES.map((category) => (
+              <button
+                key={category.id}
+                type="button"
+                className={emojiCategoryId === category.id ? "active" : ""}
+                title={category.label}
+                onClick={() => setEmojiCategoryId(category.id)}
+              >
+                <span>{category.icon}</span>
+                <small>{category.label}</small>
+              </button>
+            ))}
+          </div>
           <div className="emojiGrid">
-            {EMOJI_LIBRARY.map((item, index) => (
+            {activeEmojiCategory.items.map((item, index) => (
               <button key={`${item}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData("text/emoji", item)}>
                 {item}
               </button>

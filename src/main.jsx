@@ -1,6 +1,7 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
 import { EMOJI_CATEGORIES, getEmojiCategory } from "./emojiLibrary";
+import { createEmojiPatternStickers, createEmojiRainDrops, EMOJI_PATTERNS, EMOJI_RAIN_THEMES, getEmojiPattern, getEmojiRainLifetime } from "./emojiPlay";
 import {
   addBranch,
   addBranchMilestoneAfter,
@@ -82,6 +83,7 @@ function App() {
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
   const [confetti, setConfetti] = React.useState([]);
   const [loveRain, setLoveRain] = React.useState([]);
+  const [emojiRain, setEmojiRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
@@ -180,6 +182,13 @@ function App() {
   const closeCompletedGallery = () => {
     setCompletedGalleryOpen(false);
     setSelectedCompletedTaskId(null);
+  };
+
+  const playEmojiRain = (theme) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const drops = createEmojiRainDrops(theme, { width: rect?.width || window.innerWidth, height: rect?.height || window.innerHeight });
+    setEmojiRain(drops);
+    window.setTimeout(() => setEmojiRain([]), getEmojiRainLifetime(drops));
   };
 
   const createGoal = (position = { x: 760 + activeTasks.length * 80, y: 360 + activeTasks.length * 80 }) => {
@@ -416,8 +425,16 @@ function App() {
   const dropEmoji = (event) => {
     event.preventDefault();
     const droppedEmoji = event.dataTransfer.getData("text/emoji");
-    if (!droppedEmoji) return;
     const position = screenToWorld(event, viewport, canvasRef.current);
+    const patternId = event.dataTransfer.getData("text/emoji-pattern");
+    if (patternId) {
+      const pattern = getEmojiPattern(patternId);
+      const stickers = createEmojiPatternStickers(pattern, position);
+      updateBoard((current) => ({ ...current, stickers: [...current.stickers, ...stickers] }));
+      showToast(`${pattern.label} pattern placed.`);
+      return;
+    }
+    if (!droppedEmoji) return;
     updateBoard((current) => ({ ...current, stickers: [...current.stickers, createEmojiSticker(droppedEmoji, position)] }));
   };
 
@@ -463,6 +480,33 @@ function App() {
                 {item}
               </button>
             ))}
+          </div>
+          <div className="emojiPlayPanel">
+            <h3>Emoji rain</h3>
+            <div className="emojiPlayGrid">
+              {EMOJI_RAIN_THEMES.map((theme) => (
+                <button key={theme.id} type="button" onClick={() => playEmojiRain(theme)} title={theme.label}>
+                  <span>{theme.icon}</span>
+                  <small>{theme.label}</small>
+                </button>
+              ))}
+            </div>
+            <h3>Patterns</h3>
+            <p className="emojiPlayHint">Drag a pattern onto the canvas to place it exactly where you want.</p>
+            <div className="emojiPlayGrid">
+              {EMOJI_PATTERNS.map((pattern) => (
+                <button
+                  key={pattern.id}
+                  type="button"
+                  draggable
+                  title={`Drag ${pattern.label} to the canvas`}
+                  onDragStart={(event) => event.dataTransfer.setData("text/emoji-pattern", pattern.id)}
+                >
+                  <span>{pattern.icon}</span>
+                  <small>{pattern.label}</small>
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -685,6 +729,25 @@ function App() {
         </div>
 
         {toast && <div className="toast">{toast}</div>}
+        {emojiRain.length > 0 && (
+          <div className="emojiRain" aria-hidden="true">
+            {emojiRain.map((drop) => (
+              <span
+                key={drop.id}
+                style={{
+                  left: drop.left,
+                  top: drop.top,
+                  fontSize: `${drop.size}px`,
+                  animationDelay: `${drop.delay}ms`,
+                  animationDuration: `${drop.duration}ms`,
+                  "--fall-distance": `${drop.fallDistance}px`,
+                }}
+              >
+                {drop.emoji}
+              </span>
+            ))}
+          </div>
+        )}
         {achievementPopup && (
           <div className="achievementPopup">
             <span>{achievementPopup.emoji}</span>

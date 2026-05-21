@@ -119,6 +119,20 @@ button { cursor: pointer; }
   background: rgba(255, 255, 255, .08);
   font-size: 21px;
 }
+.emojiPlayPanel { display: grid; gap: 8px; margin-top: 12px; }
+.emojiPlayPanel h3 { margin: 4px 0 0; color: #dbe8ff; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.emojiPlayHint { margin: -2px 0 0; color: #93a3be; font-size: 11px; line-height: 1.35; }
+.emojiPlayGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.emojiPlayGrid button {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 16px;
+  color: rgba(255, 255, 255, .76);
+  background: rgba(255, 255, 255, .065);
+  padding: 8px 4px;
+}
+.emojiPlayGrid button span { display: block; font-size: 21px; line-height: 1; }
+.emojiPlayGrid button small { display: block; margin-top: 4px; font-size: 10px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .completedEntry {
   display: grid;
@@ -613,6 +627,25 @@ button { cursor: pointer; }
   0% { opacity: 0; transform: translate(-50%, -50%) scale(.4) rotate(var(--rotation)); }
   12% { opacity: 1; }
   100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 120px)) scale(.9) rotate(calc(var(--rotation) + 280deg)); }
+}
+.emojiRain {
+  position: fixed;
+  z-index: 18;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.emojiRain span {
+  position: absolute;
+  opacity: 0;
+  filter: drop-shadow(0 10px 14px rgba(0, 0, 0, .28));
+  animation: emojiRainDrop ease-in forwards;
+}
+@keyframes emojiRainDrop {
+  0% { opacity: 0; transform: translate3d(0, -30px, 0) rotate(-12deg) scale(.78); }
+  10% { opacity: 1; }
+  82% { opacity: .95; }
+  100% { opacity: 0; transform: translate3d(24px, var(--fall-distance), 0) rotate(24deg) scale(1.08); }
 }
 .contextMenu {
   position: fixed;

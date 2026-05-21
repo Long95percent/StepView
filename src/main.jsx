@@ -2,6 +2,7 @@
 import { createRoot } from "react-dom/client";
 import {
   addBranch,
+  addBranchMilestoneAfter,
   addMilestoneAfter,
   addPlanMilestoneAfter,
   addCrossTaskLink,
@@ -12,6 +13,7 @@ import {
   createConfettiBurst,
   createEmojiSticker,
   deleteBranch,
+  deleteBranchNode,
   deleteCrossTaskLink,
   deleteNode,
   deleteTask,
@@ -19,12 +21,14 @@ import {
   getAchievementCollection,
   getCompletedTaskSummary,
   getBranchSegments,
+  getTaskBranchEntries,
   getCrossTaskLinkSegments,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
   moveCanvasItem,
   normalizeBoard,
   restoreTask,
+  toggleKeyNode,
   togglePlanMilestoneComplete,
 } from "./progressCore";
 import "./styles.css";
@@ -196,11 +200,22 @@ function App() {
   };
 
   const addMilestone = (taskId, nodeId, kind = "milestone") => {
-    setNoteDraft({ taskId, nodeId, kind, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16) });
+    const task = board.tasks.find((candidate) => candidate.id === taskId);
+    const node = task?.nodes.find((candidate) => candidate.id === nodeId);
+    setNoteDraft({ taskId, nodeId, branchId: node?.branchId || null, kind, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16) });
   };
 
   const saveMilestone = (event) => {
     event.preventDefault();
+    if (noteDraft.branchId) {
+      updateBoard((current) => addBranchMilestoneAfter(current, noteDraft.branchId, noteDraft.nodeId, {
+        title: noteDraft.title,
+        detail: noteDraft.detail,
+        timestamp: new Date(noteDraft.timestamp).toISOString(),
+      }));
+      setNoteDraft(null);
+      return;
+    }
     const addNode = noteDraft.kind === "plan-milestone" ? addPlanMilestoneAfter : addMilestoneAfter;
     updateTask(noteDraft.taskId, (task) =>
       addNode(task, noteDraft.nodeId, {
@@ -281,6 +296,14 @@ function App() {
     showToast("支线已删除。");
   };
 
+  const deleteNodeFromBoard = (taskId, node) => {
+    if (node.branchId) {
+      updateBoard((current) => deleteBranchNode(current, node.id));
+      return;
+    }
+    updateTask(taskId, (currentTask) => deleteNode(currentTask, node.id));
+  };
+
   const clearBoard = () => {
     if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) updateBoard(INITIAL_BOARD);
   };
@@ -341,6 +364,10 @@ function App() {
   const completePlanMilestone = (task, node) => {
     updateTask(task.id, (currentTask) => togglePlanMilestoneComplete(currentTask, node.id, new Date()));
     if (node.status !== "completed") celebrateAt({ x: node.x, y: node.y });
+  };
+
+  const markKeyNode = (node) => {
+    updateBoard((current) => toggleKeyNode(current, node.id));
   };
 
   const startLinkDrag = (event, task, node) => {
@@ -554,7 +581,7 @@ function App() {
               {task.nodes.map((node) => (
                 <article
                   key={node.id}
-                  className={`node ${node.kind} ${node.branchId ? "branchNode" : ""} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${branchLinkDrag && !node.branchId ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
+                  className={`node ${node.kind} ${node.branchId ? "branchNode" : ""} ${node.isKeyNode ? "keyNode" : ""} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${branchLinkDrag && !node.branchId ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
                   style={{ left: node.x, top: node.y }}
                   onPointerDown={(event) => startPointerDrag(event, "node", node.id)}
                   onClick={(event) => {
@@ -579,16 +606,27 @@ function App() {
                   </div>
                   <div className="nodeTop">
                     <span className="nodeEmoji">{node.emoji}</span>
-                    {node.kind !== "finish" && (
+                    <div className="nodeTools">
+                      <button
+                        className={`keyToggle ${node.isKeyNode ? "active" : ""}`}
+                        title={node.isKeyNode ? "Unset key node" : "Set as key node"}
+                        aria-label={node.isKeyNode ? "Unset key node" : "Set as key node"}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => { event.stopPropagation(); markKeyNode(node); }}
+                      >
+                        ★
+                      </button>
+                      {node.kind !== "finish" && (
                       <div className="addGroup">
                         <button className="add" title="Add milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id); }}>+</button>
                         <button className="add planAdd" title="Add plan milestone" onClick={(event) => { event.stopPropagation(); addMilestone(task.id, node.id, "plan-milestone"); }}>＋</button>
                         <button className="add branchAdd" title="创建支线" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => startBranchDraft(event, node)}>⑂</button>
                         {node.branchId && <button className="add branchMergeAdd" title="接回主线：按住拖到主线节点" onPointerDown={(event) => startBranchLinkDrag(event, node)} onClick={(event) => event.stopPropagation()}>↩</button>}
                       </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                  <strong className="nodeTitle">{node.title}</strong>
+                  <strong className="nodeTitle">{node.isKeyNode && <span className="keyBadge">★</span>}{node.title}</strong>
                   <time>{formatCompactDate(node.timestamp)}</time>
                   {selectedNodeId === node.id && <p>{node.detail || "No details yet."}</p>}
                   {selectedNodeId === node.id && node.kind === "finish" && (
@@ -602,7 +640,7 @@ function App() {
                     </div>
                   )}
                   {selectedNodeId === node.id && node.kind === "milestone" && (
-                    <button className="danger" onClick={(event) => { event.stopPropagation(); updateTask(task.id, (currentTask) => deleteNode(currentTask, node.id)); }}>
+                    <button className="danger" onClick={(event) => { event.stopPropagation(); deleteNodeFromBoard(task.id, node); }}>
                       Delete 🗑️
                     </button>
                   )}
@@ -611,7 +649,7 @@ function App() {
                       <button className="done" onClick={(event) => { event.stopPropagation(); completePlanMilestone(task, node); }}>
                         {node.status === "completed" ? "Undo ↩️" : "Complete ✅"}
                       </button>
-                      <button className="danger" onClick={(event) => { event.stopPropagation(); updateTask(task.id, (currentTask) => deleteNode(currentTask, node.id)); }}>
+                      <button className="danger" onClick={(event) => { event.stopPropagation(); deleteNodeFromBoard(task.id, node); }}>
                         Delete 🗑️
                       </button>
                     </div>
@@ -768,6 +806,10 @@ function App() {
               <div className="journeyView">
                 <button className="ghost backButton" type="button" onClick={() => setSelectedCompletedTaskId(null)}>← Cards</button>
                 <article className="journeyPanel">
+                  {(() => {
+                    const branchEntries = getTaskBranchEntries(board, selectedCompletedTask);
+                    return null;
+                  })()}
                   <div className="journeyHero">
                     <span>{emoji(0x1f3c1)}</span>
                     <div>

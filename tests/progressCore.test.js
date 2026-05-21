@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addCrossTaskLink,
   addBranch,
+  addBranchMilestoneAfter,
   connectBranchToNode,
   ACHIEVEMENTS,
   addMilestoneAfter,
@@ -12,6 +13,7 @@ import {
   createConfettiBurst,
   createEmojiSticker,
   deleteBranch,
+  deleteBranchNode,
   deleteCrossTaskLink,
   deleteTask,
   findNodeInBoard,
@@ -19,6 +21,7 @@ import {
   getCompletedTaskSummary,
   getCrossTaskLinkSegments,
   getBranchSegments,
+  getTaskBranchEntries,
   getAchievementCollection,
   getNewlyUnlockedAchievements,
   getTaskProcessEntries,
@@ -28,6 +31,7 @@ import {
   nodeHasOutgoingNext,
   normalizeBoard,
   restoreTask,
+  toggleKeyNode,
   togglePlanMilestoneComplete,
   wouldCreateCycle,
 } from "../src/progressCore";
@@ -83,6 +87,18 @@ describe("progress board core", () => {
     expect(movedNode.tasks[0].nodes[0]).toMatchObject({ x: 42, y: 84 });
     expect(movedSticker.stickers[0]).toMatchObject({ x: 200, y: 220 });
     expect(board.tasks[0].nodes[0].x).not.toBe(42);
+  });
+
+  it("toggles a key node flag without mutating the original board", () => {
+    const task = buildTask("关键节点", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
+    const board = { tasks: [task], stickers: [] };
+
+    const marked = toggleKeyNode(board, task.nodes[0].id);
+    const unmarked = toggleKeyNode(marked, task.nodes[0].id);
+
+    expect(marked.tasks[0].nodes[0]).toMatchObject({ isKeyNode: true });
+    expect(unmarked.tasks[0].nodes[0].isKeyNode).toBe(false);
+    expect(board.tasks[0].nodes[0].isKeyNode).toBeUndefined();
   });
 
   it("normalizes missing branch data to an empty list", () => {
@@ -147,6 +163,43 @@ describe("progress board core", () => {
     expect(connected.branches[0]).toMatchObject({ mergeToNodeId: task.nodes[1].id });
     expect(getBranchSegments(connected)).toHaveLength(2);
     expect(getBranchSegments(connected)[1]).toMatchObject({ type: "lover", isMerge: true });
+  });
+
+  it("extends a branch with same-typed branch nodes and branch-colored segments", () => {
+    const task = buildTask("延长支线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "partner",
+      label: "同学帮忙",
+    });
+    const branch = board.branches[0];
+
+    const extended = addBranchMilestoneAfter(board, branch.id, branch.toNodeId, {
+      title: "一起改第二版",
+      detail: "支线继续推进",
+      timestamp: "2026-05-20T10:00:00.000Z",
+    });
+
+    expect(extended.branches[0].toNodeId).not.toBe(branch.toNodeId);
+    expect(extended.tasks[0].nodes.at(-1)).toMatchObject({ branchId: branch.id, title: "一起改第二版" });
+    expect(getBranchSegments(extended)).toHaveLength(2);
+    expect(getBranchSegments(extended).every((segment) => segment.type === "partner")).toBe(true);
+  });
+
+  it("keeps branch lines visible when deleting a middle branch node", () => {
+    const task = buildTask("删除中间支线节点", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "lover",
+      label: "心动支线",
+    });
+    const branch = board.branches[0];
+    const second = addBranchMilestoneAfter(board, branch.id, branch.toNodeId, { title: "第二个支线节点" });
+    const third = addBranchMilestoneAfter(second, branch.id, second.branches[0].toNodeId, { title: "第三个支线节点" });
+
+    const deleted = deleteBranchNode(third, second.branches[0].toNodeId);
+
+    expect(deleted.tasks[0].nodes.some((node) => node.title === "第二个支线节点")).toBe(false);
+    expect(getBranchSegments(deleted)).toHaveLength(2);
+    expect(getBranchSegments(deleted).every((segment) => segment.type === "lover")).toBe(true);
   });
 
   it("marks connected tasks complete and can restore them", () => {
@@ -323,6 +376,37 @@ describe("progress board core", () => {
 
     expect(getTaskProcessEntries(board, aiTask).map((entry) => entry.title)).toEqual(["Start", "AI 项目", "Start", "知识库"]);
     expect(getTaskProcessEntries(board, aiTask).map((entry) => entry.taskTitle)).toEqual(["AI 项目", "AI 项目", "知识库", "知识库"]);
+  });
+
+  it("lists branch entries for a completed task journey", () => {
+    const task = buildTask("展示支线历程", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const withBranch = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "lover",
+      label: "心动支线",
+      partnerName: "阿晴",
+      now: new Date("2026-05-19T09:00:00Z"),
+    });
+    const extended = addBranchMilestoneAfter(withBranch, withBranch.branches[0].id, withBranch.branches[0].toNodeId, {
+      title: "一起复盘",
+      detail: "把支线节点也带到完成展示里",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const completed = completeTask(extended, task.id, new Date("2026-05-20T08:00:00Z"));
+
+    expect(getTaskBranchEntries(completed, completed.tasks[0])).toEqual([
+      {
+        id: completed.branches[0].id,
+        type: "lover",
+        label: "心动支线",
+        partnerName: "阿晴",
+        sourceTitle: "Start",
+        mergeTitle: null,
+        nodes: [
+          expect.objectContaining({ title: "心动支线", label: "Milestone" }),
+          expect.objectContaining({ title: "一起复盘", detail: "把支线节点也带到完成展示里" }),
+        ],
+      },
+    ]);
   });
 
   it("summarizes completed tasks with board-aware cross-task journey steps", () => {

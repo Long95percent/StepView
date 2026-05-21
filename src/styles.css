@@ -487,16 +487,27 @@ button { cursor: pointer; }
 .node.branchNode { box-shadow: 0 16px 44px rgba(124, 92, 255, .2), inset 0 0 0 1px rgba(255,255,255,.12); }
 .node.finish { border-color: rgba(255, 219, 92, .52); }
 .node.start { border-color: rgba(76, 255, 199, .45); }
+.node.keyNode {
+  border-color: rgba(255, 224, 102, .9);
+  background: radial-gradient(circle at 24% 18%, rgba(255, 229, 128, .28), transparent 34%), linear-gradient(145deg, rgba(52, 42, 94, .94), rgba(15, 24, 58, .88));
+  box-shadow: 0 24px 58px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 212, 77, .45), 0 0 70px rgba(0, 212, 255, .22), inset 0 1px rgba(255,255,255,.22);
+}
 .node.plan-milestone {
   border-color: rgba(170, 178, 196, .28);
   background: linear-gradient(145deg, rgba(60, 66, 82, .72), rgba(22, 26, 34, .78));
   filter: grayscale(.9) saturate(.35);
+}
+.node.plan-milestone.keyNode {
+  filter: none;
 }
 .node.plan-milestone.completed {
   border-color: rgba(196, 142, 255, .58);
   background: linear-gradient(145deg, rgba(68, 42, 112, .9), rgba(16, 27, 65, .86));
   filter: none;
   box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 28px rgba(173, 113, 255, .22), inset 0 1px rgba(255,255,255,.16);
+}
+.node.plan-milestone.completed.keyNode {
+  box-shadow: 0 24px 58px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 212, 77, .45), 0 0 70px rgba(196, 142, 255, .28), inset 0 1px rgba(255,255,255,.22);
 }
 .node.selected { z-index: 3; outline: 3px solid rgba(0, 213, 255, .22); }
 .node.linkSource { outline: 3px solid rgba(196, 142, 255, .38); }
@@ -519,7 +530,26 @@ button { cursor: pointer; }
 .linkHandle.left { left: -6px; top: 50%; transform: translateY(-50%); }
 .nodeTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .nodeEmoji { font-size: 34px; filter: drop-shadow(0 8px 12px rgba(0,0,0,.35)); }
+.nodeTools { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.keyToggle {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, .58);
+  background: rgba(255, 255, 255, .08);
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 900;
+}
+.keyToggle.active {
+  color: #2b2100;
+  border-color: rgba(255, 236, 150, .86);
+  background: linear-gradient(135deg, #fff3a3, #ffd24a);
+  box-shadow: 0 0 20px rgba(255, 214, 74, .62);
+}
 .node strong { display: block; line-height: 1.25; }
+.keyBadge { margin-right: 6px; color: #ffe681; text-shadow: 0 0 12px rgba(255, 214, 74, .8); }
 .node time { display: block; margin-top: 5px; font-size: 12px; }
 .node p { color: #cbd8ee; font-size: 13px; line-height: 1.5; }
 .add {

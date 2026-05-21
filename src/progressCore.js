@@ -230,6 +230,35 @@ export function deleteBranch(board, branchId) {
   };
 }
 
+export function deleteBranchNode(board, nodeId) {
+  const normalized = normalizeBoard(board);
+  const node = findNodeInBoard(normalized, nodeId);
+  if (!node?.branchId) return normalized;
+  const branch = normalized.branches.find((candidate) => candidate.id === node.branchId);
+  if (!branch) return normalized;
+  const previousNodeId = node.previousBranchNodeId || branch.fromNodeId;
+  const children = normalized.tasks
+    .flatMap((task) => task.nodes)
+    .filter((candidate) => candidate.previousBranchNodeId === nodeId);
+  const nextNodeId = children[0]?.id || null;
+
+  return {
+    ...normalized,
+    tasks: normalized.tasks.map((task) => ({
+      ...task,
+      nodes: task.nodes
+        .filter((candidate) => candidate.id !== nodeId)
+        .map((candidate) => (candidate.previousBranchNodeId === nodeId ? { ...candidate, previousBranchNodeId: previousNodeId } : candidate)),
+    })),
+    branches: normalized.branches.map((candidate) => {
+      if (candidate.id !== branch.id) return candidate;
+      const toNodeId = candidate.toNodeId === nodeId ? (nextNodeId || previousNodeId) : candidate.toNodeId;
+      const mergeToNodeId = candidate.toNodeId === nodeId && !nextNodeId ? null : candidate.mergeToNodeId;
+      return { ...candidate, toNodeId, mergeToNodeId };
+    }),
+  };
+}
+
 export function connectBranchToNode(board, branchId, targetNodeId) {
   const normalized = normalizeBoard(board);
   const branch = normalized.branches.find((candidate) => candidate.id === branchId);
@@ -239,6 +268,38 @@ export function connectBranchToNode(board, branchId, targetNodeId) {
     ...normalized,
     branches: normalized.branches.map((candidate) =>
       candidate.id === branchId ? { ...candidate, mergeToNodeId: targetNodeId } : candidate,
+    ),
+  };
+}
+
+export function addBranchMilestoneAfter(board, branchId, sourceNodeId, note) {
+  const normalized = normalizeBoard(board);
+  const branch = normalized.branches.find((candidate) => candidate.id === branchId);
+  const sourceNode = findNodeInBoard(normalized, sourceNodeId);
+  if (!branch || !sourceNode) throw new Error("Branch node not found.");
+  const typeConfig = BRANCH_TYPES[branch.type] || BRANCH_TYPES.self;
+  const nodeId = makeId("node");
+  const timestamp = note.timestamp ? new Date(note.timestamp).toISOString() : new Date().toISOString();
+  const node = {
+    id: nodeId,
+    taskId: branch.taskId,
+    branchId,
+    previousBranchNodeId: sourceNodeId,
+    kind: "milestone",
+    emoji: typeConfig.emoji,
+    title: note.title?.trim() || "Branch step",
+    detail: note.detail || "",
+    timestamp,
+    x: sourceNode.x + BRANCH_GAP_X,
+    y: sourceNode.y,
+  };
+  return {
+    ...normalized,
+    tasks: normalized.tasks.map((task) =>
+      task.id === branch.taskId ? { ...task, nodes: [...task.nodes, node] } : task,
+    ),
+    branches: normalized.branches.map((candidate) =>
+      candidate.id === branchId ? { ...candidate, toNodeId: nodeId, mergeToNodeId: null } : candidate,
     ),
   };
 }
@@ -268,25 +329,31 @@ export function getBranchSegments(board) {
     const fromNode = findNodeInBoard(normalized, branch.fromNodeId);
     const toNode = findNodeInBoard(normalized, branch.toNodeId);
     if (!fromNode || !toNode) return [];
-    const branchSegment =
-      {
-        id: branch.id,
+    const branchNodes = normalized.tasks
+      .flatMap((task) => task.nodes)
+      .filter((node) => node.branchId === branch.id);
+    const branchSegments = branchNodes.map((node) => {
+      const sourceNode = node.previousBranchNodeId ? findNodeInBoard(normalized, node.previousBranchNodeId) : fromNode;
+      if (!sourceNode) return null;
+      return {
+        id: node.previousBranchNodeId ? `${branch.id}-${node.id}` : branch.id,
         branchId: branch.id,
         type: branch.type,
         anchor: branch.anchor,
         label: branch.label,
         partnerName: branch.partnerName,
-        x1: fromNode.x,
-        y1: fromNode.y,
-        x2: toNode.x,
-        y2: toNode.y,
+        x1: sourceNode.x,
+        y1: sourceNode.y,
+        x2: node.x,
+        y2: node.y,
       };
+    }).filter(Boolean);
     const mergeNode = branch.mergeToNodeId ? findNodeInBoard(normalized, branch.mergeToNodeId) : null;
-    if (!mergeNode) return [branchSegment];
+    if (!mergeNode) return branchSegments;
     return [
-      branchSegment,
+      ...branchSegments,
       {
-        ...branchSegment,
+        ...branchSegments.at(-1),
         id: `${branch.id}-merge`,
         x1: toNode.x,
         y1: toNode.y,
@@ -433,6 +500,16 @@ export function moveCanvasItem(board, itemId, position) {
   };
 }
 
+export function toggleKeyNode(board, nodeId) {
+  return {
+    ...board,
+    tasks: board.tasks.map((task) => ({
+      ...task,
+      nodes: task.nodes.map((node) => (node.id === nodeId ? { ...node, isKeyNode: !node.isKeyNode } : node)),
+    })),
+  };
+}
+
 export function deleteNode(task, nodeId) {
   const node = task.nodes.find((candidate) => candidate.id === nodeId);
   if (!node || node.kind === "start" || node.kind === "finish") return task;
@@ -487,6 +564,45 @@ export function getTaskProcessEntries(boardOrTask, maybeTask) {
   }
 
   return entries;
+}
+
+export function getTaskBranchEntries(board, task) {
+  const normalized = normalizeBoard(board);
+  return normalized.branches
+    .filter((branch) => branch.taskId === task.id)
+    .map((branch) => {
+      const sourceNode = findNodeInBoard(normalized, branch.fromNodeId);
+      const mergeNode = branch.mergeToNodeId ? findNodeInBoard(normalized, branch.mergeToNodeId) : null;
+      const branchNodes = normalized.tasks
+        .flatMap((candidate) => candidate.nodes)
+        .filter((node) => node.branchId === branch.id);
+      const remaining = new Map(branchNodes.map((node) => [node.id, node]));
+      const entries = [];
+      let current = branchNodes.find((node) => !node.previousBranchNodeId) || remaining.get(branch.toNodeId);
+
+      while (current && remaining.has(current.id)) {
+        remaining.delete(current.id);
+        const nodeWithTask = findNodeInBoard(normalized, current.id) || current;
+        entries.push(toProcessEntry(nodeWithTask, nodeWithTask.taskTitle || task.title));
+        current = branchNodes.find((node) => node.previousBranchNodeId === current.id);
+      }
+
+      for (const node of remaining.values()) {
+        const nodeWithTask = findNodeInBoard(normalized, node.id) || node;
+        entries.push(toProcessEntry(nodeWithTask, nodeWithTask.taskTitle || task.title));
+      }
+
+      return {
+        id: branch.id,
+        type: getBranchType(branch.type),
+        label: branch.label || BRANCH_TYPES[getBranchType(branch.type)].label,
+        partnerName: branch.partnerName || "",
+        sourceTitle: sourceNode?.title || null,
+        mergeTitle: mergeNode?.title || null,
+        nodes: entries,
+      };
+    })
+    .filter((branch) => branch.nodes.length > 0);
 }
 
 function getBoardTaskProcessEntries(board, task) {

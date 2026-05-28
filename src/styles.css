@@ -391,6 +391,126 @@ button { cursor: pointer; }
   background: rgba(255, 255, 255, .055);
   overflow: hidden;
 }
+.journeyArchive {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  overflow: hidden;
+}
+.archiveSection {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, .04);
+}
+.archiveSection header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.archiveSection header small {
+  color: #9fb2d2;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.archiveSection header strong {
+  color: #ecf4ff;
+  font-size: 15px;
+}
+.branchArchiveList {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  max-height: 28vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.branchArchiveCard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .05);
+}
+.branchArchiveCard.self { border-color: rgba(141, 124, 255, .22); }
+.branchArchiveCard.partner { border-color: rgba(53, 230, 168, .22); }
+.branchArchiveCard.lover { border-color: rgba(255, 95, 168, .26); }
+.branchArchiveHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.branchArchiveHeader > span {
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .09);
+  font-size: 22px;
+}
+.branchArchiveHeader div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.branchArchiveHeader strong {
+  font-size: 14px;
+  line-height: 1.2;
+}
+.branchArchiveHeader small {
+  color: #9fb2d2;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.branchMiniTimeline {
+  display: grid;
+  gap: 10px;
+}
+.branchMiniStep {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.branchMiniStep > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .08);
+  font-size: 16px;
+}
+.branchMiniStep div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.branchMiniStep small {
+  color: #9fb2d2;
+  font-size: 11px;
+}
+.branchMiniStep strong {
+  font-size: 13px;
+  line-height: 1.3;
+}
+.branchMiniStep p {
+  margin: 0;
+  color: #c9d7ec;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .journeyHero {
   display: flex;
   align-items: center;
@@ -410,7 +530,7 @@ button { cursor: pointer; }
 .journeyHero small { color: #9fb2d2; }
 .journeySummary {
   margin-left: auto;
-  grid-template-columns: repeat(2, max-content);
+  grid-template-columns: repeat(4, max-content);
   gap: 8px;
 }
 .journeySummary span {

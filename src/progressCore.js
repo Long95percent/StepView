@@ -178,6 +178,19 @@ function appendAchievement(achievementIds, achievement, condition) {
   return [...achievementIds, achievement.id];
 }
 
+function getAllBranches(board) {
+  const normalized = normalizeBoard(board);
+  const archivedBranches = normalized.tasks.flatMap((task) => Array.isArray(task.archivedBranches) ? task.archivedBranches : []);
+  const branchesById = new Map();
+
+  for (const branch of normalized.branches) branchesById.set(branch.id, branch);
+  for (const branch of archivedBranches) {
+    if (!branchesById.has(branch.id)) branchesById.set(branch.id, branch);
+  }
+
+  return [...branchesById.values()];
+}
+
 function isMay20(value) {
   if (!value) return false;
   const date = new Date(value);
@@ -193,7 +206,7 @@ function isMidnightHour(value) {
 export function unlockBoardAchievements(board) {
   const normalized = normalizeBoard(board);
   const nodes = normalized.tasks.flatMap((task) => task.nodes || []);
-  const branches = normalized.branches || [];
+  const branches = getAllBranches(normalized);
   const crossTaskLinks = (normalized.links || []).filter((link) => link.kind === "cross-task");
   const branchTaskIds = new Set(branches.map((branch) => branch.taskId));
   const mergedBranchTaskIds = new Set(branches.filter((branch) => branch.mergeToNodeId).map((branch) => branch.taskId));
@@ -691,11 +704,21 @@ export function deleteNode(task, nodeId) {
 }
 
 export function completeTask(board, taskId, now = new Date()) {
+  const normalized = normalizeBoard(board);
+  const archivedBranches = normalized.branches.filter((branch) => branch.taskId === taskId);
   return {
-    ...board,
-    tasks: board.tasks.map((task) =>
-      task.id === taskId ? { ...task, status: "completed", completedAt: now.toISOString() } : task,
+    ...normalized,
+    tasks: normalized.tasks.map((task) =>
+      task.id === taskId
+        ? {
+            ...task,
+            status: "completed",
+            completedAt: now.toISOString(),
+            ...(archivedBranches.length > 0 ? { archivedBranches } : {}),
+          }
+        : task,
     ),
+    branches: normalized.branches.filter((branch) => branch.taskId !== taskId),
   };
 }
 
@@ -736,8 +759,11 @@ export function getTaskProcessEntries(boardOrTask, maybeTask) {
 
 export function getTaskBranchEntries(board, task) {
   const normalized = normalizeBoard(board);
-  return normalized.branches
-    .filter((branch) => branch.taskId === task.id)
+  const branches = Array.isArray(task.archivedBranches) && task.archivedBranches.length > 0
+    ? task.archivedBranches
+    : normalized.branches.filter((branch) => branch.taskId === task.id);
+
+  return branches
     .map((branch) => {
       const sourceNode = findNodeInBoard(normalized, branch.fromNodeId);
       const mergeNode = branch.mergeToNodeId ? findNodeInBoard(normalized, branch.mergeToNodeId) : null;
@@ -795,30 +821,43 @@ function getBoardTaskProcessEntries(board, task) {
 export function getCompletedTaskSummary(boardOrTask, maybeTask) {
   const task = maybeTask || boardOrTask;
   const processEntries = maybeTask ? getTaskProcessEntries(boardOrTask, maybeTask) : getTaskProcessEntries(task);
+  const branchEntries = maybeTask ? getTaskBranchEntries(boardOrTask, maybeTask) : (Array.isArray(task.archivedBranches) ? task.archivedBranches : []).length;
   return {
     totalSteps: processEntries.length,
     milestoneCount: processEntries.filter((entry) => entry.kind === "milestone" || entry.kind === "plan-milestone").length,
+    branchCount: Array.isArray(branchEntries) ? branchEntries.length : branchEntries,
+    branchStepCount: Array.isArray(branchEntries) ? branchEntries.reduce((sum, branch) => sum + branch.nodes.length, 0) : 0,
     startedAt: processEntries[0]?.timestamp || task.createdAt,
     completedAt: task.completedAt,
   };
 }
 
 export function restoreTask(board, taskId) {
+  const normalized = normalizeBoard(board);
+  const taskToRestore = normalized.tasks.find((task) => task.id === taskId);
+  const restoredBranches = Array.isArray(taskToRestore?.archivedBranches) ? taskToRestore.archivedBranches : [];
+  const activeBranchIds = new Set(normalized.branches.map((branch) => branch.id));
   return {
-    ...board,
-    tasks: board.tasks.map((task) => {
+    ...normalized,
+    tasks: normalized.tasks.map((task) => {
       if (task.id !== taskId) return task;
-      const { completedAt, ...restored } = task;
+      const { archivedBranches, completedAt, ...restored } = task;
       return { ...restored, status: "active" };
     }),
+    branches: [
+      ...normalized.branches,
+      ...restoredBranches.filter((branch) => !activeBranchIds.has(branch.id)),
+    ],
   };
 }
 
 export function deleteTask(board, taskId) {
+  const normalized = normalizeBoard(board);
   return {
-    ...board,
-    tasks: board.tasks.filter((task) => task.id !== taskId),
-    links: (board.links || []).filter((link) => link.fromTaskId !== taskId && link.toTaskId !== taskId),
+    ...normalized,
+    tasks: normalized.tasks.filter((task) => task.id !== taskId),
+    branches: normalized.branches.filter((branch) => branch.taskId !== taskId),
+    links: (normalized.links || []).filter((link) => link.fromTaskId !== taskId && link.toTaskId !== taskId),
   };
 }
 

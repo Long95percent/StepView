@@ -629,4 +629,27 @@ describe("progress board core", () => {
   it("formats compact labels as year and date", () => {
     expect(formatCompactDate("2026-05-18T09:30:00.000Z")).toBe("2026/05/18");
   });
+
+  it("archives branch data with a completed task and restores it back", () => {
+    const task = buildTask("archive branch flow", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const withBranch = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "partner",
+      label: "archive branch",
+      partnerName: "Lin",
+    });
+    const extended = addBranchMilestoneAfter(withBranch, withBranch.branches[0].id, withBranch.branches[0].toNodeId, {
+      title: "branch follow-up",
+      detail: "show up in the archive view",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const completed = completeTask(extended, task.id, new Date("2026-05-20T08:00:00Z"));
+
+    expect(completed.branches).toEqual([]);
+    expect(completed.tasks[0].archivedBranches).toHaveLength(1);
+    expect(getTaskBranchEntries(completed, completed.tasks[0])).toHaveLength(1);
+
+    const restored = restoreTask(completed, task.id);
+    expect(restored.branches).toHaveLength(1);
+    expect(restored.tasks[0].archivedBranches).toBeUndefined();
+  });
 });

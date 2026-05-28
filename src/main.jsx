@@ -868,31 +868,81 @@ function App() {
                 <article className="journeyPanel">
                   {(() => {
                     const branchEntries = getTaskBranchEntries(board, selectedCompletedTask);
-                    return null;
-                  })()}
-                  <div className="journeyHero">
-                    <span>{emoji(0x1f3c1)}</span>
-                    <div>
-                      <strong>{selectedCompletedTask.title}</strong>
-                      <small>✅ {formatCompactDate(selectedCompletedTask.completedAt)}</small>
-                    </div>
-                    <div className="journeySummary">
-                      <span>{getCompletedTaskSummary(board, selectedCompletedTask).totalSteps} steps</span>
-                      <span>{getCompletedTaskSummary(board, selectedCompletedTask).milestoneCount} milestones</span>
-                    </div>
-                  </div>
-                  <div className="processTimeline journeyTimeline">
-                    {getTaskProcessEntries(board, selectedCompletedTask).map((entry) => (
-                      <div key={entry.id} className={`processStep ${entry.kind} ${entry.status === "completed" ? "completed" : ""}`}>
-                        <span className="processDot">{entry.emoji}</span>
-                        <div>
-                          <small>{entry.label}{entry.taskId !== selectedCompletedTask.id ? ` · ${entry.taskTitle}` : ""}{entry.kind === "plan-milestone" ? ` · ${entry.status === "completed" ? "Completed" : "Planned"}` : ""} · {formatCompactDate(entry.timestamp)}</small>
-                          <strong>{entry.title}</strong>
-                          <p>{entry.detail || "No note."}</p>
+                    const summary = getCompletedTaskSummary(board, selectedCompletedTask);
+                    return (
+                      <>
+                        <div className="journeyHero">
+                          <span>{emoji(0x1f3c1)}</span>
+                          <div>
+                            <strong>{selectedCompletedTask.title}</strong>
+                            <small>✅ {formatCompactDate(selectedCompletedTask.completedAt)}</small>
+                          </div>
+                          <div className="journeySummary">
+                            <span>{summary.totalSteps} steps</span>
+                            <span>{summary.milestoneCount} milestones</span>
+                            <span>{summary.branchCount} branches</span>
+                            <span>{summary.branchStepCount} branch steps</span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                        <div className="journeyArchive">
+                          <section className="archiveSection">
+                            <header>
+                              <small>Main line</small>
+                              <strong>Completed path</strong>
+                            </header>
+                            <div className="processTimeline journeyTimeline">
+                              {getTaskProcessEntries(board, selectedCompletedTask).map((entry) => (
+                                <div key={entry.id} className={`processStep ${entry.kind} ${entry.status === "completed" ? "completed" : ""}`}>
+                                  <span className="processDot">{entry.emoji}</span>
+                                  <div>
+                                    <small>{entry.label}{entry.taskId !== selectedCompletedTask.id ? ` · ${entry.taskTitle}` : ""}{entry.kind === "plan-milestone" ? ` · ${entry.status === "completed" ? "Completed" : "Planned"}` : ""} · {formatCompactDate(entry.timestamp)}</small>
+                                    <strong>{entry.title}</strong>
+                                    <p>{entry.detail || "No note."}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                          {branchEntries.length > 0 && (
+                            <section className="archiveSection branchArchive">
+                              <header>
+                                <small>Side branches</small>
+                                <strong>{branchEntries.length} archived branch{branchEntries.length > 1 ? "es" : ""}</strong>
+                              </header>
+                              <div className="branchArchiveList">
+                                {branchEntries.map((branch) => (
+                                  <article key={branch.id} className={`branchArchiveCard ${branch.type}`}>
+                                    <div className="branchArchiveHeader">
+                                      <span>{branch.type === "lover" ? "💗" : branch.type === "partner" ? "🤝" : "⑂"}</span>
+                                      <div>
+                                        <strong>{branch.partnerName || branch.label}</strong>
+                                        <small>
+                                          From {branch.sourceTitle || "unknown"}
+                                          {branch.mergeTitle ? ` · merged to ${branch.mergeTitle}` : " · open ending"}
+                                        </small>
+                                      </div>
+                                    </div>
+                                    <div className="branchMiniTimeline">
+                                      {branch.nodes.map((entry) => (
+                                        <div key={entry.id} className="branchMiniStep">
+                                          <span>{entry.emoji}</span>
+                                          <div>
+                                            <small>{entry.label} · {formatCompactDate(entry.timestamp)}</small>
+                                            <strong>{entry.title}</strong>
+                                            {entry.detail && <p>{entry.detail}</p>}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </article>
+                                ))}
+                              </div>
+                            </section>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </article>
               </div>
             ) : (
@@ -911,6 +961,8 @@ function App() {
                       <div className="completedStats">
                         <span>{summary.totalSteps} steps</span>
                         <span>{summary.milestoneCount} milestones</span>
+                        {summary.branchCount > 0 && <span>{summary.branchCount} branches</span>}
+                        {summary.branchStepCount > 0 && <span>{summary.branchStepCount} side steps</span>}
                       </div>
                       <div className="completedActions">
                         <button type="button" onClick={() => setSelectedCompletedTaskId(task.id)}>Journey 🗺️</button>

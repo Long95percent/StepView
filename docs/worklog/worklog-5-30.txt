@@ -1,0 +1,7 @@
+﻿[2026-05-30 1] 已读取 docs/README/README.txt，确认第一原则：先落库、再进内存、再展示；分层prompt、滑窗摘要、任务信号、Mem0画像、Action/Chat双模式。接下来开始审视代码实现与README的一致性。
+[2026-05-30 2] 已阅读 src/agentMemory.js、electron/boardStorage.js、tests/agentMemory.test.js 与测试设计文档。当前已有轻量派生记忆与范围问答，但更像从画布现场即时构建；README强调的原始事件层、滑窗摘要、优先落库与Action/Chat路由仍需进一步对齐。
+[2026-05-30 3] 已阅读 src/main.jsx、electron/main.js、package.json。发现前端每次更新board时会同步重建agentMemory并写入board；OpenAI增强只接收派生memory切片。潜在改进方向：补齐原始事件层与会话历史/滑窗摘要，或先强化Agent查询路由与范围消歧。根据brainstorming流程，下一步需要确认优先落地方向后再写设计。
+[2026-05-30 4] 用户确认优先级为 A：原始事件层 / 滑窗摘要 / 先落库再更新记忆。我正在核对 progressCore、boardStorage 和相关测试，确保新设计能贴着现有 board 结构落地，不破坏画布数据。
+[2026-05-30 5] 用户已确认采用独立 Agent Journal + 滚动摘要快照方案。现在开始写设计 spec：目标是拆分原始对话事件与画布事实，保证先落库、再更新摘要/agentMemory、最后展示，不污染或覆盖用户 board 数据。
+[2026-05-30 6] 已写入 agent journal + rolling summary 设计 spec。正在做自检：检查是否有 TBD/自相矛盾/范围过宽，以及是否严格保持 board 与对话日志分离。
+[2026-05-30 7] 已完成 spec 自检并提交 commit：docs: add agent journal rolling summary design。提交范围仅包含设计 spec 与本 worklog；尚未进入实现阶段，下一步需要用户审阅 spec 后再写 implementation plan。

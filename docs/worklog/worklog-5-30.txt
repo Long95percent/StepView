@@ -10,3 +10,4 @@
 [2026-05-30 15] Task 1 已完成：新增 `src/agentTurn.js` 与 `tests/agentTurn.test.js`，实现 renderer-safe 的 turn 打包与 OpenAI/fallback 同 turn 更新。已用 `npx.cmd vitest run tests/agentTurn.test.js --pool=threads` 验证通过，未触碰 board 存储或 demo/sample 逻辑。
 [2026-05-30 16] Task 2 已完成：新增独立 Agent Journal 存储与滑窗规则，rawTurns 永久保留，超过 20 轮时按最旧 5 轮合并进 rollingSummary，写入沿用临时文件、backup 与 queued write。已用 `npx.cmd vitest run tests/agentJournalStorage.test.js --pool=threads` 验证通过，未触碰 board 存储或新增 demo/sample/tutorial 覆盖逻辑。
 [2026-05-30 15] 代码质量审查发现 Agent Journal append/update 存在并发读改写竞态，已让修复子代理补充 enqueueMutation，将 read-modify-write 整体串行化，并增加并发 append/update 测试。
+[2026-05-30 16] 已接入 Agent Journal IPC：主进程新增 load/append/update turn，preload 暴露给前端；退出前同时 flush board 与 journal，两个存储仍保持分离。

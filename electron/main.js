@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAgentJournalStorage } from "./agentJournalStorage.js";
 import { createBoardStorage } from "./boardStorage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,6 +10,7 @@ const isDev = process.env.VITE_DEV_SERVER_URL;
 app.setName("StepView");
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const boardStorage = createBoardStorage({ dataDir: app.getPath("userData") });
+const agentJournalStorage = createAgentJournalStorage({ dataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 
 if (!gotSingleInstanceLock) {
@@ -59,6 +61,13 @@ app.whenReady().then(() => {
     await shell.showItemInFolder(boardStorage.boardPath());
     return boardStorage.boardPath();
   });
+  ipcMain.handle("agent:load-journal", agentJournalStorage.readJournal);
+  ipcMain.handle("agent:append-turn", (_event, request = {}) =>
+    agentJournalStorage.appendTurn(request.turn, { memory: request.memory }),
+  );
+  ipcMain.handle("agent:update-turn", (_event, request = {}) =>
+    agentJournalStorage.updateTurn(request.turn, { memory: request.memory }),
+  );
 
   createWindow();
   app.on("activate", () => {
@@ -73,7 +82,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", (event) => {
   if (isQuittingAfterStorageFlush) return;
   event.preventDefault();
-  boardStorage.flushWrites().finally(() => {
+  Promise.all([boardStorage.flushWrites(), agentJournalStorage.flushWrites()]).finally(() => {
     isQuittingAfterStorageFlush = true;
     app.quit();
   });

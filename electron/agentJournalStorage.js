@@ -228,24 +228,31 @@ export function createAgentJournalStorage({ dataDir, fsApi = defaultFs }) {
     return { ok: true, path: journalPath() };
   }
 
+  function enqueueOperation(operation) {
+    const queued = writeQueue.catch(() => undefined).then(operation);
+    writeQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
   function writeJournal(journal) {
-    const write = writeQueue.catch(() => undefined).then(() => writeJournalNow(journal));
-    writeQueue = write.catch(() => undefined);
-    return write;
+    return enqueueOperation(() => writeJournalNow(journal));
+  }
+
+  function enqueueMutation(mutator) {
+    return enqueueOperation(async () => {
+      const journal = await readJournal();
+      const nextJournal = mutator(journal);
+      await writeJournalNow(nextJournal);
+      return nextJournal;
+    });
   }
 
   async function appendTurn(turn, options = {}) {
-    const journal = await readJournal();
-    const nextJournal = appendAgentTurn(journal, turn, options);
-    await writeJournal(nextJournal);
-    return nextJournal;
+    return enqueueMutation((journal) => appendAgentTurn(journal, turn, options));
   }
 
   async function updateTurn(turn, options = {}) {
-    const journal = await readJournal();
-    const nextJournal = updateAgentTurn(journal, turn, options);
-    await writeJournal(nextJournal);
-    return nextJournal;
+    return enqueueMutation((journal) => updateAgentTurn(journal, turn, options));
   }
 
   function flushWrites() {

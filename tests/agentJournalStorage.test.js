@@ -22,6 +22,20 @@ function makeTurn(index) {
   };
 }
 
+function createNotFoundError() {
+  const error = new Error("ENOENT");
+  error.code = "ENOENT";
+  return error;
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("agent journal storage", () => {
   let tempDir;
 
@@ -33,6 +47,50 @@ describe("agent journal storage", () => {
   async function makeStore(options = {}) {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-journal-"));
     return createAgentJournalStorage({ dataDir: tempDir, ...options });
+  }
+
+  async function makeBlockingStore(initialJournal = EMPTY_AGENT_JOURNAL) {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-journal-"));
+    const journalPath = path.join(tempDir, "stepview-agent-journal.json");
+    const backupPath = path.join(tempDir, "stepview-agent-journal.backup.json");
+    const files = new Map([[journalPath, JSON.stringify(initialJournal, null, 2)]]);
+    const primaryReads = createDeferred();
+    let primaryReadCount = 0;
+    let releaseScheduled = false;
+
+    const fsApi = {
+      mkdir: async () => {},
+      readFile: async (filePath, encoding) => {
+        if (encoding !== "utf8") throw new Error(`Unexpected encoding: ${encoding}`);
+        if (!files.has(filePath)) throw createNotFoundError();
+
+        if (filePath === journalPath) {
+          primaryReadCount += 1;
+          if (!releaseScheduled) {
+            releaseScheduled = true;
+            setTimeout(primaryReads.resolve, 0);
+          }
+          if (primaryReadCount === 2) primaryReads.resolve();
+          await primaryReads.promise;
+        }
+
+        return files.get(filePath);
+      },
+      copyFile: async (sourcePath, destinationPath) => {
+        if (!files.has(sourcePath)) throw createNotFoundError();
+        files.set(destinationPath, files.get(sourcePath));
+      },
+      writeFile: async (filePath, contents) => {
+        files.set(filePath, contents);
+      },
+      rename: async (sourcePath, destinationPath) => {
+        if (!files.has(sourcePath)) throw createNotFoundError();
+        files.set(destinationPath, files.get(sourcePath));
+        files.delete(sourcePath);
+      },
+    };
+
+    return createAgentJournalStorage({ dataDir: tempDir, fsApi });
   }
 
   it("returns an empty journal when no files exist", async () => {
@@ -89,6 +147,34 @@ describe("agent journal storage", () => {
       assistantText: "OpenAI 增强回答",
       source: "openai",
       model: "gpt-5.1",
+    });
+  });
+
+  it("keeps both concurrent appends when they start from the same journal", async () => {
+    const storage = await makeBlockingStore();
+    const turn1 = makeTurn(1);
+    const turn2 = makeTurn(2);
+
+    await Promise.all([storage.appendTurn(turn1), storage.appendTurn(turn2)]);
+
+    await expect(storage.readJournal()).resolves.toMatchObject({
+      rawTurns: [expect.objectContaining({ id: "turn-1" }), expect.objectContaining({ id: "turn-2" })],
+    });
+  });
+
+  it("keeps unrelated turns when append and update overlap", async () => {
+    const initialJournal = appendAgentTurn(EMPTY_AGENT_JOURNAL, makeTurn(1), { now: "2026-05-30T11:00:00.000Z" });
+    const storage = await makeBlockingStore(initialJournal);
+    const appendedTurn = makeTurn(2);
+    const updatedTurn = { ...makeTurn(1), assistantText: "updated response", source: "openai", model: "gpt-5.1" };
+
+    await Promise.all([storage.appendTurn(appendedTurn), storage.updateTurn(updatedTurn)]);
+
+    await expect(storage.readJournal()).resolves.toMatchObject({
+      rawTurns: expect.arrayContaining([
+        expect.objectContaining({ id: "turn-1", assistantText: "updated response", source: "openai", model: "gpt-5.1" }),
+        expect.objectContaining({ id: "turn-2" }),
+      ]),
     });
   });
 

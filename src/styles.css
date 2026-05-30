@@ -36,6 +36,7 @@ button { cursor: pointer; }
   scrollbar-width: thin;
   scrollbar-color: rgba(128, 247, 255, .32) rgba(255, 255, 255, .035);
 }
+.sidebar > section:first-of-type { margin-top: auto; }
 .sidebar::-webkit-scrollbar, .emojiGrid::-webkit-scrollbar { width: 8px; }
 .sidebar::-webkit-scrollbar-track, .emojiGrid::-webkit-scrollbar-track {
   border-radius: 999px;
@@ -857,6 +858,7 @@ button { cursor: pointer; }
   border-radius: 28px;
   background: #10162d;
   box-shadow: 0 30px 90px rgba(0,0,0,.5);
+  color-scheme: dark;
 }
 .modal h2 { margin: 0; }
 .modal label { display: grid; gap: 8px; color: #aab9d4; }
@@ -868,9 +870,31 @@ button { cursor: pointer; }
   color: white;
   background: rgba(255,255,255,.07);
 }
+.modal select {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  padding: 12px;
+  color: #eef4ff;
+  background: linear-gradient(145deg, rgba(14, 19, 40, .98), rgba(8, 12, 29, .96));
+  box-shadow: inset 0 1px rgba(255,255,255,.08);
+  color-scheme: dark;
+}
+.modal select option {
+  color: #eef4ff;
+  background: #0b1023;
+}
 .modal textarea { min-height: 120px; resize: vertical; }
 .modalActions { display: flex; justify-content: flex-end; gap: 10px; }
 .modalActions button:first-child { background: rgba(255,255,255,.1); box-shadow: none; }
+.settingsModal { width: min(520px, calc(100vw - 40px)); }
+.settingsModal label {
+  display: grid;
+  gap: 8px;
+  color: #aab9d4;
+  font-size: 12px;
+  font-weight: 750;
+}
 .tutorialPanel {
   width: min(560px, calc(100vw - 40px));
   display: grid;
@@ -925,6 +949,228 @@ button { cursor: pointer; }
   color: white;
   background: rgba(255,255,255,.07);
 }
+.agentPanel {
+  display: grid;
+  gap: 10px;
+  color-scheme: dark;
+}
+.agentModeSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 14px;
+  background: rgba(255,255,255,.04);
+}
+.agentModeSwitch button {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px;
+  color: #aab9d4;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 850;
+}
+.agentModeSwitch button.active {
+  color: #06111d;
+  background: linear-gradient(135deg, #80f7ff, #c48eff);
+}
+.agentProviderFields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed rgba(128, 247, 255, .2);
+  border-radius: 16px;
+  background: rgba(128, 247, 255, .045);
+}
+.agentPanel label {
+  display: grid;
+  gap: 7px;
+  color: #aab9d4;
+  font-size: 12px;
+  font-weight: 750;
+}
+.agentPanel select,
+.agentPanel input,
+.agentPanel textarea {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 16px;
+  padding: 10px 11px;
+  color: #eef4ff;
+  background: linear-gradient(145deg, rgba(14, 19, 40, .98), rgba(8, 12, 29, .96));
+  box-shadow: inset 0 1px rgba(255,255,255,.08);
+}
+.agentPanel select {
+  min-height: 40px;
+  color-scheme: dark;
+}
+.agentPanel select option {
+  color: #eef4ff;
+  background: #0b1023;
+}
+.agentPanel textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+.agentAnswer {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(128, 247, 255, .13);
+  border-radius: 16px;
+  background: rgba(128, 247, 255, .055);
+}
+.agentAnswer strong {
+  color: #e8f7ff;
+  font-size: 13px;
+}
+.agentAnswer p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: #b9c8df;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.agentAnswer small {
+  width: max-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #bff9ff;
+  background: rgba(128, 247, 255, .1);
+  font-size: 11px;
+}
+.agentConversation {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.agentConversation header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agentConversation header strong {
+  min-width: 0;
+  color: #e8f7ff;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agentConversation header small {
+  color: #91a5c6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agentMessageList {
+  display: grid;
+  gap: 12px;
+  max-height: min(46vh, 430px);
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 18px;
+  background: rgba(4, 8, 18, .48);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.agentEmptySession {
+  margin: 0;
+  color: #98a9c6;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.agentTurn {
+  display: grid;
+  gap: 8px;
+}
+.agentBubble {
+  display: grid;
+  gap: 5px;
+  max-width: 92%;
+  padding: 10px 11px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+}
+.agentBubble small {
+  color: #8fa2c1;
+  font-size: 10px;
+}
+.agentBubble p {
+  margin: 0;
+  color: #d9e8ff;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agentBubble.user {
+  justify-self: end;
+  border-color: rgba(128, 247, 255, .2);
+  background: rgba(31, 84, 105, .28);
+}
+.agentBubble.assistant {
+  justify-self: start;
+  border-color: rgba(196, 142, 255, .18);
+  background: rgba(28, 24, 57, .5);
+}
+.agentDrawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 9;
+  height: 100vh;
+  pointer-events: none;
+}
+.agentDrawerHandle {
+  position: absolute;
+  right: 0;
+  top: 112px;
+  width: 34px;
+  height: 98px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-right: 0;
+  border-radius: 18px 0 0 18px;
+  color: #eef4ff;
+  background: linear-gradient(180deg, rgba(17, 24, 48, .96), rgba(9, 13, 29, .94));
+  box-shadow: -12px 0 28px rgba(0, 0, 0, .28);
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+}
+.agentDrawerHandle span { display: block; font-size: 22px; font-weight: 900; line-height: 1; }
+.agentDrawerPanel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(390px, 82vw);
+  height: 100vh;
+  padding: 16px 20px 16px 16px;
+  border-left: 1px solid rgba(255,255,255,.1);
+  background: rgba(9, 12, 28, .92);
+  box-shadow: -24px 0 70px rgba(0, 0, 0, .34);
+  transform: translateX(100%);
+  transition: transform .24s ease;
+  backdrop-filter: blur(26px);
+  pointer-events: auto;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.agentDrawer.open .agentDrawerPanel { transform: translateX(0); }
+.agentDrawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.agentDrawerHeader div { min-width: 0; display: grid; gap: 2px; }
+.agentDrawerHeader strong { font-size: 18px; letter-spacing: -.03em; }
+.agentDrawerHeader small { color: #9fb2d2; font-size: 11px; }
 .storagePill {
   width: max-content;
   padding: 7px 10px;

@@ -11,3 +11,8 @@
 [2026-05-30 16] Task 2 已完成：新增独立 Agent Journal 存储与滑窗规则，rawTurns 永久保留，超过 20 轮时按最旧 5 轮合并进 rollingSummary，写入沿用临时文件、backup 与 queued write。已用 `npx.cmd vitest run tests/agentJournalStorage.test.js --pool=threads` 验证通过，未触碰 board 存储或新增 demo/sample/tutorial 覆盖逻辑。
 [2026-05-30 15] 代码质量审查发现 Agent Journal append/update 存在并发读改写竞态，已让修复子代理补充 enqueueMutation，将 read-modify-write 整体串行化，并增加并发 append/update 测试。
 [2026-05-30 16] 已接入 Agent Journal IPC：主进程新增 load/append/update turn，preload 暴露给前端；退出前同时 flush board 与 journal，两个存储仍保持分离。
+[2026-05-30 17] 已将前端 Agent 提问接入 Journal：本地回答先 append 原始 turn，OpenAI 成功/失败都 update 同一 turn；board 仍只通过 agentMemory 派生快照更新，不保存对话历史。
+[2026-05-30 18] 已完成 Agent Journal 全量验证：npm test 通过（7 files / 69 tests），npm run build 通过；rawTurns/rollingSummary 仅存在于独立 journal 存储链路与测试/IPC，未写入 boardStorage/progressCore；未新增 demo/sample 覆盖逻辑。
+[2026-05-30 19] 最终 review 发现 OpenAI 早退路径（桥接不可用/API Key 缺失）没有 update 同一 journal turn。已补充 fallback update，保证 UI 展示的 fallback 状态与 Journal 中同一 turn 对齐。
+[2026-05-30 20] 已按用户要求调整前端 Agent：询问范围只保留当前画布活跃任务线，完成/删除任务不再作为 session；移除本地模式入口，仅保留外接 API；Agent 面板改为按任务线 session 展示的对话形式。验证：npm test 8 files / 72 tests passed，npm run build passed。
+[2026-05-30 21] 已根据用户确认的 README 首要架构要求，开始搭建真实 Redis + Mem0 + SQLite 的 Agent 基础设施：新增 SQLite session store（agent_sessions/agent_turns/session_windows/signals/prompt_snapshots/mem0_sync_log）、Redis prompt/window cache、Mem0 HTTP adapter、session prompt builder 与 Agent service，并将 Electron `agent:chat` 与前端发送链路切到按 `task:<taskId>` 的任务线 session。前端不再调用本地规则回答，不再用全局 Journal 冒充任务线会话。验证：`npm test` 通过（11 files / 79 tests），`npm run build` 通过；未新增 demo/sample/tutorial 覆盖逻辑，board 事实层仍与 Agent session 存储分离。

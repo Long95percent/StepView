@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("stepview", {
   saveBoard: (board) => ipcRenderer.invoke("board:save", board),
   revealDataFile: () => ipcRenderer.invoke("board:reveal"),
   loadAgentJournal: () => ipcRenderer.invoke("agent:load-journal"),
-  appendAgentTurn: (request) => ipcRenderer.invoke("agent:append-turn", request),
-  updateAgentTurn: (request) => ipcRenderer.invoke("agent:update-turn", request),
+  loadAgentSession: (request) => ipcRenderer.invoke("agent:load-session", request),
+  chatAgent: (request) => ipcRenderer.invoke("agent:chat", request),
+  askOpenAI: (request) => ipcRenderer.invoke("ai:ask-openai", request),
 });

@@ -1,7 +1,7 @@
 import defaultFs from "node:fs/promises";
 import path from "node:path";
 
-const EMPTY_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
+const EMPTY_BOARD = { tasks: [], stickers: [], links: [], branches: [], achievements: [], agentMemory: null };
 const BOARD_FILE = "stepview-board.json";
 const BACKUP_FILE = "stepview-board.backup.json";
 const TEMP_FILE = "stepview-board.json.tmp";
@@ -11,7 +11,9 @@ function normalizeBoard(value) {
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
     links: Array.isArray(value?.links) ? value.links : [],
+    branches: Array.isArray(value?.branches) ? value.branches : [],
     achievements: Array.isArray(value?.achievements) ? value.achievements : [],
+    agentMemory: value?.agentMemory && typeof value.agentMemory === "object" ? value.agentMemory : null,
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
 }

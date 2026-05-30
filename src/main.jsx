@@ -35,19 +35,40 @@ import {
   togglePlanMilestoneComplete,
   unlockBoardAchievements,
 } from "./progressCore";
+import { buildAgentMemory } from "./agentMemory";
+import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId } from "./agentSessionUi";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
+const SETTINGS_KEY = "stepview-settings-v1";
 const emoji = (codePoint) => String.fromCodePoint(codePoint);
 const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
+const EMPTY_AGENT_JOURNAL = {
+  sessions: {},
+  updatedAt: null,
+};
+const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
 const desktopApi = window.stepview;
-
 function loadBrowserBoard() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? normalizeBoard(JSON.parse(saved)) : INITIAL_BOARD;
+    return saved ? withFreshAgentMemory(normalizeBoard(JSON.parse(saved))) : INITIAL_BOARD;
   } catch {
     return INITIAL_BOARD;
+  }
+}
+
+function withFreshAgentMemory(board) {
+  const normalized = normalizeBoard(board);
+  return { ...normalized, agentMemory: buildAgentMemory(normalized) };
+}
+
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
   }
 }
 
@@ -78,6 +99,7 @@ function App() {
   const [toast, setToast] = React.useState(null);
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [completedGalleryOpen, setCompletedGalleryOpen] = React.useState(false);
   const [achievementGalleryOpen, setAchievementGalleryOpen] = React.useState(false);
   const [selectedCompletedTaskId, setSelectedCompletedTaskId] = React.useState(null);
@@ -85,9 +107,34 @@ function App() {
   const [loveRain, setLoveRain] = React.useState([]);
   const [emojiRain, setEmojiRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
+  const [settings, setSettings] = React.useState(loadSettings);
+  const [settingsDraft, setSettingsDraft] = React.useState(loadSettings);
+  const [agentDrawerOpen, setAgentDrawerOpen] = React.useState(false);
+  const [agentScopeId, setAgentScopeId] = React.useState("global");
+  const [agentQuestion, setAgentQuestion] = React.useState("");
+  const [agentJournal, setAgentJournal] = React.useState(EMPTY_AGENT_JOURNAL);
+  const [agentLoading, setAgentLoading] = React.useState(false);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
   const canvasRef = React.useRef(null);
+
+  const saveSettings = (event) => {
+    event.preventDefault();
+    const nextSettings = {
+      agentModel: settingsDraft.agentModel.trim() || DEFAULT_SETTINGS.agentModel,
+      openaiApiKey: settingsDraft.openaiApiKey.trim(),
+      openaiBaseUrl: settingsDraft.openaiBaseUrl.trim() || DEFAULT_SETTINGS.openaiBaseUrl,
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+    setSettings(nextSettings);
+    setSettingsOpen(false);
+    setToast("设置已保存。");
+  };
+
+  const openSettings = () => {
+    setSettingsDraft(settings);
+    setSettingsOpen(true);
+  };
 
   const persistBoard = React.useCallback((nextBoard) => {
     const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
@@ -122,7 +169,7 @@ function App() {
     async function load() {
       try {
         if (desktopApi) {
-          const saved = chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard());
+          const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
           if (!cancelled) {
             setBoard(saved);
             persistBoard(saved);
@@ -146,22 +193,43 @@ function App() {
     };
   }, [persistBoard]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadAgentJournal() {
+      if (!desktopApi?.loadAgentJournal) return;
+      try {
+        const journal = await desktopApi.loadAgentJournal();
+        if (!cancelled && journal) setAgentJournal(journal);
+      } catch (error) {
+        console.error("Failed to load agent journal", error);
+      }
+    }
+    loadAgentJournal();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const updateBoard = React.useCallback((updater) => {
     setBoard((current) => {
       const rawNextBoard = typeof updater === "function" ? updater(current) : updater;
       const nextBoard = unlockBoardAchievements(rawNextBoard);
-      const [achievement] = getNewlyUnlockedAchievements(current, nextBoard);
+      const nextBoardWithMemory = { ...nextBoard, agentMemory: buildAgentMemory(nextBoard) };
+      const [achievement] = getNewlyUnlockedAchievements(current, nextBoardWithMemory);
       if (achievement) {
         setAchievementPopup(achievement);
         window.setTimeout(() => setAchievementPopup(null), 3600);
       }
-      if (isLoaded) persistBoard(nextBoard);
-      return nextBoard;
+      if (isLoaded) persistBoard(nextBoardWithMemory);
+      return nextBoardWithMemory;
     });
   }, [isLoaded, persistBoard]);
 
   const activeTasks = board.tasks.filter((task) => task.status === "active");
   const completedTasks = board.tasks.filter((task) => task.status === "completed");
+  const agentScopeOptions = React.useMemo(() => getActiveAgentScopeOptions(board, board.agentMemory), [board]);
+  const agentSessionTurns = React.useMemo(() => getAgentSessionTurns(agentJournal, agentScopeId), [agentJournal, agentScopeId]);
+  const agentSessionLabel = agentScopeOptions.find((option) => option.id === agentScopeId)?.label || "当前画布";
   const activeEmojiCategory = getEmojiCategory(emojiCategoryId);
   const achievementCollection = getAchievementCollection(board);
   const unlockedAchievements = achievementCollection.filter((achievement) => achievement.unlocked);
@@ -171,6 +239,11 @@ function App() {
     .filter(Boolean)
     .sort()
     .at(-1);
+
+  React.useEffect(() => {
+    const nextScopeId = sanitizeAgentScopeId(board, agentScopeId, board.agentMemory);
+    if (nextScopeId !== agentScopeId) setAgentScopeId(nextScopeId);
+  }, [agentScopeId, board]);
 
   const updateTask = (taskId, updater) => {
     updateBoard((current) => ({
@@ -309,6 +382,61 @@ function App() {
   const showToast = (message) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 1700);
+  };
+
+  const askAgent = async (event) => {
+    event.preventDefault();
+    const submittedQuestion = agentQuestion.trim();
+    if (!submittedQuestion) return;
+    if (!desktopApi?.chatAgent) {
+      showToast("Agent 后端尚未连接。请使用桌面端运行。");
+      return;
+    }
+    if (!settings.openaiApiKey.trim()) {
+      showToast("需要先在 Settings 填写 API Key。");
+      openSettings();
+      return;
+    }
+    if (!agentScopeId || agentScopeId === "global") {
+      showToast("请选择一条任务线会话。");
+      return;
+    }
+
+    setAgentLoading(true);
+    try {
+      const result = await desktopApi.chatAgent({
+        sessionId: agentScopeId,
+        userText: submittedQuestion,
+        apiKey: settings.openaiApiKey,
+        model: settings.agentModel,
+        baseUrl: settings.openaiBaseUrl,
+      });
+      setAgentQuestion("");
+      if (result?.session) {
+        setAgentJournal((current) => ({
+          ...current,
+          sessions: {
+            ...(current.sessions || {}),
+            [agentScopeId]: result.session,
+          },
+          updatedAt: new Date().toISOString(),
+        }));
+      } else if (desktopApi?.loadAgentJournal) {
+        const journal = await desktopApi.loadAgentJournal();
+        if (journal) setAgentJournal(journal);
+      }
+    } catch (error) {
+      console.error("Agent chat failed", error);
+      showToast(`Agent 发送失败：${error.message}`);
+      try {
+        const journal = await desktopApi?.loadAgentJournal?.();
+        if (journal) setAgentJournal(journal);
+      } catch (reloadError) {
+        console.error("Failed to reload agent session after chat failure", reloadError);
+      }
+    } finally {
+      setAgentLoading(false);
+    }
   };
 
   const cancelLinkDrag = () => {
@@ -455,6 +583,8 @@ function App() {
           </label>
           <button className="primary" type="submit">Create 🏁</button>
           <button className="ghost" type="button" onClick={() => setTutorialOpen(true)}>Tutorial ✨</button>
+          <button className="ghost" type="button" onClick={openSettings}>Settings ⚙️</button>
+          <button className="ghost" type="button" onClick={() => setAgentDrawerOpen(true)}>Agent 🧠</button>
           <button className="ghost" type="button" onClick={() => setViewport({ x: window.innerWidth / 2 - 400, y: window.innerHeight / 2 - 260, scale: 1 })}>Focus 🔍</button>
         </form>
 
@@ -847,6 +977,87 @@ function App() {
           </section>
         </div>
       )}
+
+      {settingsOpen && (
+        <div className="modalBackdrop" onPointerDown={() => setSettingsOpen(false)}>
+          <form className="modal settingsModal" onSubmit={saveSettings} onPointerDown={(event) => event.stopPropagation()}>
+            <h2>Settings ⚙️</h2>
+          <label>
+            API Key
+            <input type="password" value={settingsDraft.openaiApiKey} onChange={(event) => setSettingsDraft({ ...settingsDraft, openaiApiKey: event.target.value })} placeholder="sk-..." />
+          </label>
+          <label>
+            默认模型
+            <input value={settingsDraft.agentModel} onChange={(event) => setSettingsDraft({ ...settingsDraft, agentModel: event.target.value })} placeholder="gpt-5.1" />
+          </label>
+          <label>
+            Base URL
+            <input value={settingsDraft.openaiBaseUrl} onChange={(event) => setSettingsDraft({ ...settingsDraft, openaiBaseUrl: event.target.value })} placeholder="https://api.openai.com/v1" />
+          </label>
+          <div className="modalActions">
+            <button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button>
+            <button className="primary">Save</button>
+          </div>
+        </form>
+      </div>
+      )}
+
+      <aside className={`agentDrawer ${agentDrawerOpen ? "open" : ""}`}>
+        <button className="agentDrawerHandle" type="button" onClick={() => setAgentDrawerOpen((open) => !open)}>
+          <span>&lt;</span>
+        </button>
+        <div className="agentDrawerPanel">
+          <header className="agentDrawerHeader">
+            <div>
+              <strong>Agent</strong>
+              <small>外接 API · {settings.agentModel}</small>
+            </div>
+            <button type="button" className="ghost" onClick={() => setAgentDrawerOpen(false)}>收起</button>
+          </header>
+          <form className="agentPanel" onSubmit={askAgent}>
+            <div className="agentProviderFields">
+              <p>{settings.openaiApiKey ? `已配置 · ${settings.openaiBaseUrl}` : "去 Settings 填写 API Key 和 Base URL 后启用外接 API。"}</p>
+              <button className="ghost" type="button" onClick={openSettings}>打开设置</button>
+            </div>
+            <label>
+              会话
+              <select value={agentScopeId} onChange={(event) => setAgentScopeId(event.target.value)}>
+                {agentScopeOptions.length === 0 && <option value="global">先创建一条活跃任务线</option>}
+                {agentScopeOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              输入
+              <textarea value={agentQuestion} onChange={(event) => setAgentQuestion(event.target.value)} placeholder="继续这个任务线会话..." />
+            </label>
+            <button className="primary" type="submit" disabled={!agentQuestion.trim() || agentLoading}>{agentLoading ? "Thinking..." : "发送"}</button>
+          </form>
+          <div className="agentConversation">
+            <header>
+              <strong>{agentSessionLabel}</strong>
+              <small>{agentSessionTurns.length} 条对话</small>
+            </header>
+            <div className="agentMessageList">
+              {agentSessionTurns.length === 0 ? (
+                <p className="agentEmptySession">这个会话还没有对话。完成和删除的任务线不会出现在这里。</p>
+              ) : agentSessionTurns.map((turn) => (
+                <article key={turn.id} className="agentTurn">
+                  <div className="agentBubble user">
+                    <small>你</small>
+                    <p>{turn.userText}</p>
+                  </div>
+                  <div className="agentBubble assistant">
+                    <small>{turn.source === "openai" ? `API · ${turn.model || settings.agentModel}` : turn.status === "failed" ? "发送失败" : "模型"}</small>
+                    <p>{turn.status === "failed" ? "模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。" : turn.assistantText || "等待模型回复..."}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      </aside>
 
       {completedGalleryOpen && (
         <div className="galleryBackdrop" onPointerDown={closeCompletedGallery}>

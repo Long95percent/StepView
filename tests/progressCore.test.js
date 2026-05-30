@@ -484,6 +484,8 @@ describe("progress board core", () => {
     expect(getCompletedTaskSummary(completed.tasks[0])).toEqual({
       totalSteps: 3,
       milestoneCount: 1,
+      branchCount: 0,
+      branchStepCount: 0,
       startedAt: "2026-05-18T09:30:00.000Z",
       completedAt: "2026-05-20T08:00:00.000Z",
     });
@@ -540,7 +542,7 @@ describe("progress board core", () => {
 
     expect(getTaskBranchEntries(completed, completed.tasks[0])).toEqual([
       {
-        id: completed.branches[0].id,
+        id: completed.tasks[0].archivedBranches[0].id,
         type: "lover",
         label: "心动支线",
         partnerName: "阿晴",

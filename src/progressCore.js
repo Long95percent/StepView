@@ -151,6 +151,7 @@ export function normalizeBoard(value) {
     links: Array.isArray(value?.links) ? value.links : [],
     branches: Array.isArray(value?.branches) ? value.branches : [],
     achievements: Array.isArray(value?.achievements) ? value.achievements : [],
+    agentMemory: value?.agentMemory && typeof value.agentMemory === "object" ? value.agentMemory : null,
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
 }

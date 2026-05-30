@@ -5,3 +5,5 @@
 [2026-05-30 5] 用户已确认采用独立 Agent Journal + 滚动摘要快照方案。现在开始写设计 spec：目标是拆分原始对话事件与画布事实，保证先落库、再更新摘要/agentMemory、最后展示，不污染或覆盖用户 board 数据。
 [2026-05-30 6] 已写入 agent journal + rolling summary 设计 spec。正在做自检：检查是否有 TBD/自相矛盾/范围过宽，以及是否严格保持 board 与对话日志分离。
 [2026-05-30 7] 已完成 spec 自检并提交 commit：docs: add agent journal rolling summary design。提交范围仅包含设计 spec 与本 worklog；尚未进入实现阶段，下一步需要用户审阅 spec 后再写 implementation plan。
+[2026-05-30 8] 用户已确认 agent journal + rolling summary 设计 spec 可以进入下一步。开始根据 writing-plans 流程编写 implementation plan，计划会按 TDD 拆分存储、滑窗、IPC、前端接入与验证任务。
+[2026-05-30 14] 已完成 implementation plan 初稿与自检：任务拆分为 turn helpers、journal storage、IPC、renderer 持久化、全量验证五段，字段与 spec 保持一致。

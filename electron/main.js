@@ -158,6 +158,28 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());
   });
+  ipcMain.handle("agent:tools:list", () => gateway.getContext().toolRegistry.list());
+  ipcMain.handle("agent:tools:run", async (_event, request = {}) => {
+    const context = gateway.getContext();
+    const sessionId = request.sessionId || null;
+    const result = await context.toolRuntime.run(request.toolId, request.input || {}, {
+      accountId: context.accountId,
+      agentId: "user",
+      workspaceId: request.workspaceId || null,
+      sessionId,
+      boardStorage: context.boardStorage,
+      memoryRepository: context.memoryRepository,
+      audit: (event) => sessionId && context.agentSqliteStore.recordSignal?.({ sessionId, kind: "tool_run", payload: event }),
+    });
+    if (result.result?.type?.endsWith?.("_proposal")) return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    if (result.result?.type === "memory_upsert" || result.result?.type === "board_change") return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    return result;
+  });
+  ipcMain.handle("agent:approvals:list", () => { const context = gateway.getContext(); return context.approvalManager.list(context.accountId); });
+  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => { const context = gateway.getContext(); const entry = context.approvalManager.decide(request.approvalId, context.accountId, request.decision); if (entry.status === "approved" && entry.proposal.type === "memory_upsert") entry.appliedMemory = context.memoryRepository.upsert(entry.proposal.memory); return entry; });
+  ipcMain.handle("agent:memory:list", (_event, options = {}) => gateway.getContext().memoryRepository.list(options));
+  ipcMain.handle("agent:memory:feedback", (_event, request = {}) => gateway.getContext().memoryRepository.feedback(request.memoryId, request.action, { nextValue: request.nextValue, reason: request.reason }));
+  ipcMain.handle("agent:memory:evidence", (_event, request = {}) => gateway.getContext().memoryRepository.listEvidence(request.memoryId));
   ipcMain.handle("agent:load-session", async (_event, request = {}) =>
     serializeSessionView(await gateway.getContext().agentService.loadSessionView(request.sessionId)),
   );

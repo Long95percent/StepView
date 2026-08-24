@@ -71,6 +71,8 @@ export function createAgentService({
   sqliteStore,
   redisCache,
   mem0Client,
+  memoryExtractor,
+  contextOrchestrator,
   logger = console,
 }) {
   function ensureTaskSession({ taskLineId, title, personaText = "", status = "active" }) {
@@ -162,13 +164,22 @@ export function createAgentService({
       logger.warn?.("Mem0 search failed", error);
       return [];
     }) || [];
+    const contextPack = await contextOrchestrator?.retrieve?.(userText, {
+      scopeType: "user",
+      tokenBudget: 800,
+      context: { accountId: sqliteStore.accountId, agentId: "user", sessionId },
+    }).catch((error) => {
+      logger.warn?.("Local memory retrieval failed", error);
+      return { items: [] };
+    }) || { items: [] };
+    const retrievedMemories = [...contextPack.items, ...mem0Memories];
 
     const prompt = buildAgentPrompt({
       session,
       boardMemory,
       recentTurns,
       rollingSummary: previousWindow.rollingSummary,
-      mem0Memories,
+      mem0Memories: retrievedMemories,
       userText,
       model,
     });
@@ -189,7 +200,7 @@ export function createAgentService({
     await redisCache?.savePromptState?.(sessionId, prompt.promptState);
     await redisCache?.saveWindowState?.(sessionId, windowState);
 
-    return { session, turn, prompt, mem0Memories, boardMemory };
+    return { session, turn, prompt, mem0Memories: retrievedMemories, contextPack, boardMemory };
   }
 
   async function completeChat(prepared, {
@@ -244,6 +255,11 @@ export function createAgentService({
       mem0Id: mem0Result?.id || null,
       metadata: { ...metadata, result: mem0Result },
     });
+    // Memory extraction is deliberately detached from the response path.
+    if (memoryExtractor?.extractAndStore) {
+      Promise.resolve(memoryExtractor.extractAndStore(turn.userText, { sourceRef: turn.turnId }))
+        .catch((error) => logger.warn?.("Memory extraction failed", error));
+    }
     await redisCache?.saveWindowState?.(prepared.session.sessionId, window);
     return loadSessionView(prepared.session.sessionId);
   }

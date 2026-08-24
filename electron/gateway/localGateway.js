@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { buildAgentMemory } from "../../src/agentMemory.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
+import { validateNetworkPolicy } from "./networkPolicy.js";
 
 const PERSONAL_ACCOUNT_ID = "local-personal";
 
@@ -15,6 +16,7 @@ export function createLocalGateway({
 } = {}) {
   if (!config) throw new Error("Gateway config is required.");
   if (!appDataDir) throw new Error("Gateway appDataDir is required.");
+  validateNetworkPolicy({ mode: config.mode, host: config.bindHost || "127.0.0.1", allowLan: config.allowLan, enableUpnp: config.enableUpnp });
   let context;
   let accountStore;
   let sessionId;
@@ -45,12 +47,31 @@ export function createLocalGateway({
       const { createRedisAgentCache } = await import("../agentRedisClient.js");
       const { createMem0Client } = await import("../agentMem0Client.js");
       const { createAgentService } = await import("../agentService.js");
+      const { createAgentMemorySqliteStore } = await import("../agentMemorySqliteStore.js");
+      const { createMemoryPluginManager } = await import("../agent/memoryPluginManager.js");
+      const { createMemoryExtractor } = await import("../agent/memoryExtractor.js");
+      const { createMemoryWriter } = await import("../agent/memoryWriter.js");
+      const { createContextOrchestrator } = await import("../agent/contextOrchestrator.js");
+      const { createToolRegistry } = await import("../agent/toolRegistry.js");
+      const { createToolRuntime } = await import("../agent/toolRuntime.js");
+      const { registerBuiltInTools } = await import("../agent/builtInTools.js");
+      const { createApprovalManager } = await import("../agent/approvalManager.js");
       const boardStorage = createBoardStorage({ dataDir });
       const agentSqliteStore = createAgentSqliteStore({ dataDir });
       const redisCache = createRedisAgentCache();
       const mem0Client = createMem0Client();
-      const agentService = createAgentService({ sqliteStore: agentSqliteStore, redisCache, mem0Client });
-      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); } };
+      const memoryRepository = createAgentMemorySqliteStore({ dataDir, accountId: PERSONAL_ACCOUNT_ID });
+      const memoryPlugins = createMemoryPluginManager();
+      const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
+      const memoryWriter = createMemoryWriter({ repository: memoryRepository });
+      const policyExtractor = createMemoryExtractor({ repository: memoryRepository, writer: memoryWriter });
+      const contextOrchestrator = createContextOrchestrator({ repository: memoryRepository, memoryPlugins });
+      const toolRegistry = createToolRegistry();
+      registerBuiltInTools({ registry: toolRegistry });
+      const toolRuntime = createToolRuntime({ registry: toolRegistry });
+      const approvalManager = createApprovalManager();
+      const agentService = createAgentService({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: policyExtractor, contextOrchestrator });
+      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, memoryRepository, memoryPlugins, contextOrchestrator, toolRegistry, toolRuntime, approvalManager, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); await memoryPlugins.close(); memoryRepository.close(); } };
     }
     initialized = true;
     return context;

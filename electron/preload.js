@@ -15,5 +15,12 @@ contextBridge.exposeInMainWorld("stepview", {
   loadAgentJournal: () => ipcRenderer.invoke("agent:load-journal"),
   loadAgentSession: (request) => ipcRenderer.invoke("agent:load-session", request),
   chatAgent: (request) => ipcRenderer.invoke("agent:chat", request),
+  listAgentTools: () => ipcRenderer.invoke("agent:tools:list"),
+  runAgentTool: (request) => ipcRenderer.invoke("agent:tools:run", request),
+  listAgentApprovals: () => ipcRenderer.invoke("agent:approvals:list"),
+  decideAgentApproval: (request) => ipcRenderer.invoke("agent:approvals:decide", request),
+  listAgentMemories: (options) => ipcRenderer.invoke("agent:memory:list", options),
+  updateAgentMemory: (request) => ipcRenderer.invoke("agent:memory:feedback", request),
+  listAgentMemoryEvidence: (request) => ipcRenderer.invoke("agent:memory:evidence", request),
   askOpenAI: (request) => ipcRenderer.invoke("ai:ask-openai", request),
 });

@@ -40,6 +40,8 @@ import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId 
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
+const BROWSER_ACCOUNTS_KEY = "stepview-browser-accounts-v1";
+const BROWSER_CURRENT_ACCOUNT_KEY = "stepview-browser-current-account-v1";
 const SETTINGS_KEY = "stepview-settings-v1";
 const emoji = (codePoint) => String.fromCodePoint(codePoint);
 const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
@@ -49,6 +51,75 @@ const EMPTY_AGENT_JOURNAL = {
 };
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
 const desktopApi = window.stepview;
+
+function createBrowserAccountId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return `browser-${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+const browserAccountApi = {
+  async registerAccount({ username, password, displayName }) {
+    const accounts = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]");
+    const normalizedUsername = username.trim().toLowerCase();
+    if (accounts.some((account) => account.username === normalizedUsername)) throw new Error("Username is already registered.");
+    const account = { accountId: createBrowserAccountId(), username: normalizedUsername, displayName: displayName?.trim() || normalizedUsername };
+    localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify([...accounts, { ...account, password }]));
+    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(account));
+    return account;
+  },
+  async login({ username, password }) {
+    const normalizedUsername = username.trim().toLowerCase();
+    const account = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]").find((candidate) => candidate.username === normalizedUsername && candidate.password === password);
+    if (!account) throw new Error("Invalid username or password.");
+    const safeAccount = { accountId: account.accountId, username: account.username, displayName: account.displayName };
+    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(safeAccount));
+    return safeAccount;
+  },
+};
+
+function GatewayLogin({ api, onAuthenticated }) {
+  const [registering, setRegistering] = React.useState(false);
+  const [username, setUsername] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [displayName, setDisplayName] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const input = { username, password };
+      const account = registering ? await api.registerAccount({ ...input, displayName }) : await api.login(input);
+      onAuthenticated(account);
+    } catch (submitError) {
+      setError(submitError.message || "Account request failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="gatewayLogin">
+      <form className="gatewayLoginForm" onSubmit={submit}>
+        <div className="brand"><span>{emoji(0x1fa90)}</span><strong>StepView</strong></div>
+        <h1>{registering ? "Create your account" : "Welcome back"}</h1>
+        <label>Username<input required value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label>
+        {registering && <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>}
+        <label>Password<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={registering ? "new-password" : "current-password"} /></label>
+        {error && <p className="gatewayError">{error}</p>}
+        <button className="primary" disabled={busy} type="submit">{busy ? "Please wait..." : registering ? "Register" : "Log in"}</button>
+        <button className="ghost" type="button" onClick={() => { setRegistering((value) => !value); setError(""); }}>{registering ? "Back to login" : "Create an account"}</button>
+      </form>
+    </main>
+  );
+}
 function loadBrowserBoard() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -116,7 +187,19 @@ function App() {
   const [agentLoading, setAgentLoading] = React.useState(false);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
+  const [gatewayInfo, setGatewayInfo] = React.useState(desktopApi ? null : { mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
+  const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!desktopApi?.getGatewayInfo) return;
+    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => console.error("Failed to load gateway info", error));
+  }, []);
+
+  React.useEffect(() => {
+    if (gatewayInfo?.mode !== "family" || !gatewayInfo.account || !desktopApi?.listAccounts) return;
+    desktopApi.listAccounts().then(setAccounts).catch((error) => console.error("Failed to load accounts", error));
+  }, [gatewayInfo]);
 
   const saveSettings = (event) => {
     event.preventDefault();
@@ -168,6 +251,7 @@ function App() {
     let cancelled = false;
     async function load() {
       try {
+        if (!gatewayInfo || !gatewayInfo.account) return;
         if (desktopApi) {
           const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
           if (!cancelled) {
@@ -191,12 +275,12 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [persistBoard]);
+  }, [persistBoard, gatewayInfo]);
 
   React.useEffect(() => {
     let cancelled = false;
     async function loadAgentJournal() {
-      if (!desktopApi?.loadAgentJournal) return;
+      if (!desktopApi?.loadAgentJournal || !gatewayInfo || !gatewayInfo.account) return;
       try {
         const journal = await desktopApi.loadAgentJournal();
         if (!cancelled && journal) setAgentJournal(journal);
@@ -208,7 +292,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [gatewayInfo]);
 
   const updateBoard = React.useCallback((updater) => {
     setBoard((current) => {
@@ -566,7 +650,34 @@ function App() {
     updateBoard((current) => ({ ...current, stickers: [...current.stickers, createEmojiSticker(droppedEmoji, position)] }));
   };
 
+  const logoutAccount = async () => {
+    await desktopApi.logout();
+    setBoard(INITIAL_BOARD);
+    setAgentJournal(EMPTY_AGENT_JOURNAL);
+    setGatewayInfo((current) => ({ ...current, account: null }));
+  };
+
+  const switchAccount = async (accountId) => {
+    const account = await desktopApi.switchAccount({ accountId });
+    setBoard(INITIAL_BOARD);
+    setAgentJournal(EMPTY_AGENT_JOURNAL);
+    setGatewayInfo((current) => ({ ...current, account }));
+  };
+
+  const importPersonalData = async () => {
+    if (!window.confirm("Import personal data into this account? Existing account data will be backed up.")) return;
+    await desktopApi.importPersonalData({ confirm: true });
+    const saved = withFreshAgentMemory(await desktopApi.loadBoard());
+    setBoard(saved);
+    setToast("Personal data imported.");
+  };
+
   return (
+    desktopApi && !gatewayInfo
+      ? <main className="gatewayLogin"><p>Loading...</p></main>
+      : !gatewayInfo.account
+        ? <GatewayLogin api={desktopApi || browserAccountApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
+        : (
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
@@ -575,6 +686,18 @@ function App() {
             <strong>StepView ✨</strong>
           </div>
         </div>
+
+        {gatewayInfo?.mode === "family" && gatewayInfo.account && (
+          <section className="accountPanel">
+            <h2>Account</h2>
+            <p>{gatewayInfo.account.displayName || gatewayInfo.account.username}</p>
+            <button className="ghost" type="button" onClick={logoutAccount}>Log out</button>
+            <button className="ghost" type="button" onClick={importPersonalData}>Import personal data</button>
+            {accounts.filter((account) => account.accountId !== gatewayInfo.account.accountId).map((account) => (
+              <button className="ghost" type="button" key={account.accountId} onClick={() => switchAccount(account.accountId)}>Switch to {account.displayName || account.username}</button>
+            ))}
+          </section>
+        )}
 
         <form className="quickCreate" onSubmit={(event) => { event.preventDefault(); createGoal(); }}>
           <label>
@@ -1219,6 +1342,7 @@ function App() {
         </div>
       )}
     </main>
+        )
   );
 }
 

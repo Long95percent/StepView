@@ -11,6 +11,13 @@ body { margin: 0; overflow: hidden; }
 button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 
+.gatewayLogin { display: grid; width: 100vw; height: 100vh; place-items: center; background: #070912; }
+.gatewayLoginForm { display: grid; width: min(420px, calc(100vw - 40px)); gap: 14px; padding: 32px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(255,255,255,.06); }
+.gatewayLoginForm h1 { margin: 6px 0; }
+.gatewayLoginForm label { display: grid; gap: 6px; color: #b8c7e2; font-size: 13px; }
+.gatewayLoginForm input { padding: 10px 12px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; color: #fff; background: rgba(0,0,0,.2); }
+.gatewayError { margin: 0; color: #ff9eaa; font-size: 13px; }
+
 .shell {
   display: grid;
   grid-template-columns: 300px 1fr;

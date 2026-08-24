@@ -3,25 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
-import { createMem0Client } from "./agentMem0Client.js";
-import { createRedisAgentCache } from "./agentRedisClient.js";
-import { createAgentService } from "./agentService.js";
-import { createAgentSqliteStore } from "./agentSqliteStore.js";
-import { createBoardStorage } from "./boardStorage.js";
+import { loadConfig } from "./config.js";
+import { createGateway } from "./gateway/createGateway.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
 app.setName("StepView");
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
-const boardStorage = createBoardStorage({ dataDir: app.getPath("userData") });
-const agentSqliteStore = createAgentSqliteStore({ dataDir: app.getPath("userData") });
-const agentRedisCache = createRedisAgentCache();
-const agentMem0Client = createMem0Client();
-const agentService = createAgentService({
-  sqliteStore: agentSqliteStore,
-  redisCache: agentRedisCache,
-  mem0Client: agentMem0Client,
-});
+const config = loadConfig();
+const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5.1";
@@ -73,8 +63,9 @@ function serializeSessionViews(views) {
 }
 
 async function loadCurrentBoardMemory() {
-  await boardStorage.flushWrites();
-  const board = await boardStorage.readBoard();
+  const context = gateway.getContext();
+  await context.boardStorage.flushWrites();
+  const board = await context.boardStorage.readBoard();
   return buildAgentMemory(board);
 }
 
@@ -138,7 +129,9 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await gateway.initialize();
+
   app.on("second-instance", () => {
     const [window] = BrowserWindow.getAllWindows();
     if (!window) return;
@@ -146,29 +139,38 @@ app.whenReady().then(() => {
     window.focus();
   });
 
-  ipcMain.handle("board:load", boardStorage.readBoard);
-  ipcMain.handle("board:save", (_event, board) => boardStorage.writeBoard(board));
+  ipcMain.handle("board:load", () => gateway.loadBoard());
+  ipcMain.handle("board:save", (_event, board) => gateway.saveBoard(board));
+  ipcMain.handle("gateway:info", () => ({ mode: gateway.getMode(), account: gateway.getCurrentAccount() }));
+  ipcMain.handle("account:list", () => gateway.listAccounts());
+  ipcMain.handle("account:register", (_event, input) => gateway.registerAccount(input));
+  ipcMain.handle("account:login", (_event, input) => gateway.login(input));
+  ipcMain.handle("account:logout", () => gateway.logout());
+  ipcMain.handle("account:current", () => gateway.getCurrentAccount());
+  ipcMain.handle("account:switch", (_event, input) => gateway.switchAccount(input));
+  ipcMain.handle("account:import-personal-data", (_event, input) => gateway.importPersonalData(input));
   ipcMain.handle("board:reveal", async () => {
-    await fs.mkdir(path.dirname(boardStorage.boardPath()), { recursive: true });
-    await shell.showItemInFolder(boardStorage.boardPath());
-    return boardStorage.boardPath();
+    const context = gateway.getContext();
+    await fs.mkdir(path.dirname(context.boardStorage.boardPath()), { recursive: true });
+    await shell.showItemInFolder(context.boardStorage.boardPath());
+    return context.boardStorage.boardPath();
   });
   ipcMain.handle("agent:load-journal", async () => {
-    const memory = await loadCurrentBoardMemory();
-    agentService.syncSessionsFromBoardMemory(memory);
-    return serializeSessionViews(await agentService.listSessionViews());
+    return serializeSessionViews(await gateway.loadAgentJournal());
   });
   ipcMain.handle("agent:load-session", async (_event, request = {}) =>
-    serializeSessionView(await agentService.loadSessionView(request.sessionId)),
+    serializeSessionView(await gateway.getContext().agentService.loadSessionView(request.sessionId)),
   );
   ipcMain.handle("agent:chat", async (_event, request = {}) => {
+    const activeContext = gateway.getContext();
+    const activeGeneration = gateway.getContextGeneration();
     const userText = String(request.userText || request.question || "").trim();
     if (!userText) throw new Error("Agent message is empty.");
     const memory = await loadCurrentBoardMemory();
-    agentService.syncSessionsFromBoardMemory(memory);
+    activeContext.agentService.syncSessionsFromBoardMemory(memory);
     const sessionId = String(request.sessionId || request.scopeId || "").trim();
     if (!sessionId || sessionId === "global") throw new Error("请选择一条活跃任务线会话。");
-    const prepared = await agentService.prepareChat({
+    const prepared = await activeContext.agentService.prepareChat({
       sessionId,
       userText,
       boardMemory: memory,
@@ -181,7 +183,8 @@ app.whenReady().then(() => {
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
       });
-      const view = await agentService.completeChat(prepared, {
+      if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");
+      const view = await activeContext.agentService.completeChat(prepared, {
         assistantText: result.text,
         model: result.model,
         source: "openai",
@@ -193,14 +196,16 @@ app.whenReady().then(() => {
         session: serializeSessionView(view),
       };
     } catch (error) {
-      agentSqliteStore.completeTurn({
-        turnId: prepared.turn.turnId,
-        assistantText: "",
-        source: "openai-error",
-        model: request.model || DEFAULT_OPENAI_MODEL,
-        status: "failed",
-      });
-      agentService.refreshSessionWindow(sessionId);
+      if (gateway.isCurrentContext(activeContext, activeGeneration)) {
+        activeContext.agentSqliteStore.completeTurn({
+          turnId: prepared.turn.turnId,
+          assistantText: "",
+          source: "openai-error",
+          model: request.model || DEFAULT_OPENAI_MODEL,
+          status: "failed",
+        });
+        activeContext.agentService.refreshSessionWindow(sessionId);
+      }
       throw error;
     }
   });
@@ -259,8 +264,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", (event) => {
   if (isQuittingAfterStorageFlush) return;
   event.preventDefault();
-  Promise.all([boardStorage.flushWrites(), agentRedisCache.close?.()]).finally(() => {
-    agentSqliteStore.close();
+  gateway.close().finally(() => {
     isQuittingAfterStorageFlush = true;
     app.quit();
   });

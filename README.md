@@ -66,6 +66,26 @@ npm install
 npm run desktop
 ```
 
+### 家庭版网页端
+
+家庭版会同时启动网页和带账号隔离的 HTTP Gateway：
+
+```bash
+npm run family
+```
+
+本机访问 `http://127.0.0.1:5173`。如需让家庭局域网内的手机或电脑访问，请在 `.env.local` 中显式填写本机局域网 IP：
+
+```dotenv
+STEPVIEW_MODE=family
+STEPVIEW_BIND_HOST=192.168.1.10
+STEPVIEW_ALLOW_LAN=true
+STEPVIEW_HTTP_PORT=3210
+VITE_STEPVIEW_API_URL=http://192.168.1.10:3210/api
+```
+
+然后访问 `http://192.168.1.10:5173`。家庭账号、画布和 Agent 会话保存在 `.stepview-family-data`（可用 `STEPVIEW_DATA_DIR` 修改），网页端不再使用浏览器账号代替家庭后端。
+
 ## 构建发布包
 
 ```bash

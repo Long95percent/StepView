@@ -37,6 +37,7 @@ import {
 } from "./progressCore";
 import { buildAgentMemory } from "./agentMemory";
 import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId } from "./agentSessionUi";
+import { createBrowserGatewayApi } from "./browserGatewayApi";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -50,7 +51,7 @@ const EMPTY_AGENT_JOURNAL = {
   updatedAt: null,
 };
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
-const desktopApi = window.stepview;
+const desktopApi = window.stepview || createBrowserGatewayApi();
 
 function createBrowserAccountId() {
   if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
@@ -187,13 +188,16 @@ function App() {
   const [agentLoading, setAgentLoading] = React.useState(false);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
-  const [gatewayInfo, setGatewayInfo] = React.useState(desktopApi ? null : { mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
+  const [gatewayInfo, setGatewayInfo] = React.useState(null);
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!desktopApi?.getGatewayInfo) return;
-    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => console.error("Failed to load gateway info", error));
+    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => {
+      console.error("Failed to load gateway info", error);
+      setGatewayInfo({ mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
+    });
   }, []);
 
   React.useEffect(() => {
@@ -221,7 +225,7 @@ function App() {
 
   const persistBoard = React.useCallback((nextBoard) => {
     const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
-    if (desktopApi) {
+    if (gatewayInfo?.mode !== "browser") {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
       } catch (backupError) {
@@ -245,14 +249,14 @@ function App() {
       console.error("Failed to save board", error);
       setToast("Save failed. Please avoid closing StepView.");
     }
-  }, []);
+  }, [gatewayInfo?.mode]);
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         if (!gatewayInfo || !gatewayInfo.account) return;
-        if (desktopApi) {
+        if (gatewayInfo.mode !== "browser") {
           const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
           if (!cancelled) {
             setBoard(saved);
@@ -472,7 +476,7 @@ function App() {
     event.preventDefault();
     const submittedQuestion = agentQuestion.trim();
     if (!submittedQuestion) return;
-    if (!desktopApi?.chatAgent) {
+    if (gatewayInfo?.mode === "browser" || !desktopApi?.chatAgent) {
       showToast("Agent 后端尚未连接。请使用桌面端运行。");
       return;
     }
@@ -651,7 +655,11 @@ function App() {
   };
 
   const logoutAccount = async () => {
-    await desktopApi.logout();
+    if (gatewayInfo.mode === "browser") {
+      localStorage.removeItem(BROWSER_CURRENT_ACCOUNT_KEY);
+    } else {
+      await desktopApi.logout();
+    }
     setBoard(INITIAL_BOARD);
     setAgentJournal(EMPTY_AGENT_JOURNAL);
     setGatewayInfo((current) => ({ ...current, account: null }));
@@ -676,7 +684,7 @@ function App() {
     desktopApi && !gatewayInfo
       ? <main className="gatewayLogin"><p>Loading...</p></main>
       : !gatewayInfo.account
-        ? <GatewayLogin api={desktopApi || browserAccountApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
+        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? browserAccountApi : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
         : (
     <main className="shell">
       <aside className="sidebar">
@@ -692,7 +700,7 @@ function App() {
             <h2>Account</h2>
             <p>{gatewayInfo.account.displayName || gatewayInfo.account.username}</p>
             <button className="ghost" type="button" onClick={logoutAccount}>Log out</button>
-            <button className="ghost" type="button" onClick={importPersonalData}>Import personal data</button>
+            {desktopApi.importPersonalData && <button className="ghost" type="button" onClick={importPersonalData}>Import personal data</button>}
             {accounts.filter((account) => account.accountId !== gatewayInfo.account.accountId).map((account) => (
               <button className="ghost" type="button" key={account.accountId} onClick={() => switchAccount(account.accountId)}>Switch to {account.displayName || account.username}</button>
             ))}
@@ -793,8 +801,8 @@ function App() {
 
         <section>
           <h2>💾 Save</h2>
-          <p className="storagePill">{desktopApi ? "Local file ✅" : "Browser ✅"}</p>
-          {desktopApi && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
+          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local file ✅"}</p>
+          {desktopApi.revealDataFile && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
           <button className="danger wide" onClick={clearBoard}>Clear 🧹</button>
         </section>
       </aside>
@@ -1347,4 +1355,3 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
-

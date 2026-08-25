@@ -334,7 +334,7 @@ Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 G
 
 - `userProfileStore` 和 `knowledgeBaseRegistry` 已有基础存储/模板能力，但尚未接入完整 UI。
 - 关键词检索已可用；向量检索和 reranker 仍通过 provider 边界预留。
-- 家庭 LAN HTTP 服务目前没有开放完整的 CIDR、CSRF、限流服务面；默认仍以 Electron IPC/回环为主。
+- 家庭版已提供带 Bearer session 的 HTTP Gateway；默认绑定回环地址，LAN 模式仍需继续补充 CIDR 白名单和限流。
 - Agent SQLite 通过账号独立数据库实现隔离，旧表尚未做字段级 accountId 迁移。
 - 正式 Recall@K、Precision@K 和 Prompt Injection 评测集尚未建立。
 

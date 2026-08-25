@@ -16,10 +16,11 @@ describe("gateway config", () => {
         STEPVIEW_MODE: "family",
         STEPVIEW_ALLOW_REGISTRATION: "false",
         STEPVIEW_SESSION_TTL_HOURS: "24",
+        STEPVIEW_HTTP_PORT: "4321",
       },
       envFilePath: "/missing/.env.local",
     });
-    expect(config).toMatchObject({ mode: "family", allowRegistration: false, sessionTtlHours: 24 });
+    expect(config).toMatchObject({ mode: "family", allowRegistration: false, sessionTtlHours: 24, httpPort: 4321 });
   });
 
   it("rejects invalid mode and numeric settings", () => {

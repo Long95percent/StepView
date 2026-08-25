@@ -37,6 +37,7 @@ import {
 } from "./progressCore";
 import { buildAgentMemory } from "./agentMemory";
 import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId } from "./agentSessionUi";
+import { createBrowserGatewayApi } from "./browserGatewayApi";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -50,7 +51,7 @@ const EMPTY_AGENT_JOURNAL = {
   updatedAt: null,
 };
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
-const desktopApi = window.stepview;
+const desktopApi = window.stepview || createBrowserGatewayApi();
 
 function createBrowserAccountId() {
   if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
@@ -185,15 +186,20 @@ function App() {
   const [agentQuestion, setAgentQuestion] = React.useState("");
   const [agentJournal, setAgentJournal] = React.useState(EMPTY_AGENT_JOURNAL);
   const [agentLoading, setAgentLoading] = React.useState(false);
+  const [streamingTurn, setStreamingTurn] = React.useState(null);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
-  const [gatewayInfo, setGatewayInfo] = React.useState(desktopApi ? null : { mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
+  const [gatewayInfo, setGatewayInfo] = React.useState(null);
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
+  const agentMessageListRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!desktopApi?.getGatewayInfo) return;
-    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => console.error("Failed to load gateway info", error));
+    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => {
+      console.error("Failed to load gateway info", error);
+      setGatewayInfo({ mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
+    });
   }, []);
 
   React.useEffect(() => {
@@ -221,7 +227,7 @@ function App() {
 
   const persistBoard = React.useCallback((nextBoard) => {
     const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
-    if (desktopApi) {
+    if (gatewayInfo?.mode !== "browser") {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
       } catch (backupError) {
@@ -245,14 +251,14 @@ function App() {
       console.error("Failed to save board", error);
       setToast("Save failed. Please avoid closing StepView.");
     }
-  }, []);
+  }, [gatewayInfo?.mode]);
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         if (!gatewayInfo || !gatewayInfo.account) return;
-        if (desktopApi) {
+        if (gatewayInfo.mode !== "browser") {
           const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
           if (!cancelled) {
             setBoard(saved);
@@ -313,6 +319,9 @@ function App() {
   const completedTasks = board.tasks.filter((task) => task.status === "completed");
   const agentScopeOptions = React.useMemo(() => getActiveAgentScopeOptions(board, board.agentMemory), [board]);
   const agentSessionTurns = React.useMemo(() => getAgentSessionTurns(agentJournal, agentScopeId), [agentJournal, agentScopeId]);
+  const visibleAgentTurns = React.useMemo(() => (
+    streamingTurn?.sessionId === agentScopeId ? [...agentSessionTurns, streamingTurn] : agentSessionTurns
+  ), [agentSessionTurns, agentScopeId, streamingTurn]);
   const agentSessionLabel = agentScopeOptions.find((option) => option.id === agentScopeId)?.label || "当前画布";
   const activeEmojiCategory = getEmojiCategory(emojiCategoryId);
   const achievementCollection = getAchievementCollection(board);
@@ -323,6 +332,12 @@ function App() {
     .filter(Boolean)
     .sort()
     .at(-1);
+
+  React.useEffect(() => {
+    if (!agentDrawerOpen) return;
+    const messageList = agentMessageListRef.current;
+    if (messageList) messageList.scrollTop = messageList.scrollHeight;
+  }, [agentDrawerOpen, agentScopeId, visibleAgentTurns]);
 
   React.useEffect(() => {
     const nextScopeId = sanitizeAgentScopeId(board, agentScopeId, board.agentMemory);
@@ -472,7 +487,7 @@ function App() {
     event.preventDefault();
     const submittedQuestion = agentQuestion.trim();
     if (!submittedQuestion) return;
-    if (!desktopApi?.chatAgent) {
+    if (gatewayInfo?.mode === "browser" || !desktopApi?.chatAgent) {
       showToast("Agent 后端尚未连接。请使用桌面端运行。");
       return;
     }
@@ -486,16 +501,33 @@ function App() {
       return;
     }
 
+    const pendingTurn = {
+      id: `stream-${Date.now()}`,
+      sessionId: agentScopeId,
+      scopeId: agentScopeId,
+      userText: submittedQuestion,
+      assistantText: "",
+      source: "openai",
+      model: settings.agentModel,
+      status: "streaming",
+      createdAt: new Date().toISOString(),
+    };
+    setAgentQuestion("");
+    setStreamingTurn(pendingTurn);
     setAgentLoading(true);
     try {
-      const result = await desktopApi.chatAgent({
+      const request = {
         sessionId: agentScopeId,
         userText: submittedQuestion,
         apiKey: settings.openaiApiKey,
         model: settings.agentModel,
         baseUrl: settings.openaiBaseUrl,
-      });
-      setAgentQuestion("");
+      };
+      const result = desktopApi.chatAgentStream
+        ? await desktopApi.chatAgentStream(request, (delta) => {
+          setStreamingTurn((current) => current?.id === pendingTurn.id ? { ...current, assistantText: current.assistantText + delta } : current);
+        })
+        : await desktopApi.chatAgent(request);
       if (result?.session) {
         setAgentJournal((current) => ({
           ...current,
@@ -519,6 +551,7 @@ function App() {
         console.error("Failed to reload agent session after chat failure", reloadError);
       }
     } finally {
+      setStreamingTurn(null);
       setAgentLoading(false);
     }
   };
@@ -651,7 +684,11 @@ function App() {
   };
 
   const logoutAccount = async () => {
-    await desktopApi.logout();
+    if (gatewayInfo.mode === "browser") {
+      localStorage.removeItem(BROWSER_CURRENT_ACCOUNT_KEY);
+    } else {
+      await desktopApi.logout();
+    }
     setBoard(INITIAL_BOARD);
     setAgentJournal(EMPTY_AGENT_JOURNAL);
     setGatewayInfo((current) => ({ ...current, account: null }));
@@ -676,7 +713,7 @@ function App() {
     desktopApi && !gatewayInfo
       ? <main className="gatewayLogin"><p>Loading...</p></main>
       : !gatewayInfo.account
-        ? <GatewayLogin api={desktopApi || browserAccountApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
+        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? browserAccountApi : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
         : (
     <main className="shell">
       <aside className="sidebar">
@@ -692,7 +729,7 @@ function App() {
             <h2>Account</h2>
             <p>{gatewayInfo.account.displayName || gatewayInfo.account.username}</p>
             <button className="ghost" type="button" onClick={logoutAccount}>Log out</button>
-            <button className="ghost" type="button" onClick={importPersonalData}>Import personal data</button>
+            {desktopApi.importPersonalData && <button className="ghost" type="button" onClick={importPersonalData}>Import personal data</button>}
             {accounts.filter((account) => account.accountId !== gatewayInfo.account.accountId).map((account) => (
               <button className="ghost" type="button" key={account.accountId} onClick={() => switchAccount(account.accountId)}>Switch to {account.displayName || account.username}</button>
             ))}
@@ -793,8 +830,8 @@ function App() {
 
         <section>
           <h2>💾 Save</h2>
-          <p className="storagePill">{desktopApi ? "Local file ✅" : "Browser ✅"}</p>
-          {desktopApi && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
+          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local file ✅"}</p>
+          {desktopApi.revealDataFile && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
           <button className="danger wide" onClick={clearBoard}>Clear 🧹</button>
         </section>
       </aside>
@@ -1137,7 +1174,7 @@ function App() {
             </div>
             <button type="button" className="ghost" onClick={() => setAgentDrawerOpen(false)}>收起</button>
           </header>
-          <form className="agentPanel" onSubmit={askAgent}>
+          <div className="agentChatLayout">
             <div className="agentProviderFields">
               <p>{settings.openaiApiKey ? `已配置 · ${settings.openaiBaseUrl}` : "去 Settings 填写 API Key 和 Base URL 后启用外接 API。"}</p>
               <button className="ghost" type="button" onClick={openSettings}>打开设置</button>
@@ -1151,33 +1188,43 @@ function App() {
                 ))}
               </select>
             </label>
-            <label>
-              输入
-              <textarea value={agentQuestion} onChange={(event) => setAgentQuestion(event.target.value)} placeholder="继续这个任务线会话..." />
-            </label>
-            <button className="primary" type="submit" disabled={!agentQuestion.trim() || agentLoading}>{agentLoading ? "Thinking..." : "发送"}</button>
-          </form>
-          <div className="agentConversation">
-            <header>
-              <strong>{agentSessionLabel}</strong>
-              <small>{agentSessionTurns.length} 条对话</small>
-            </header>
-            <div className="agentMessageList">
-              {agentSessionTurns.length === 0 ? (
+            <div className="agentConversation">
+              <header>
+                <strong>{agentSessionLabel}</strong>
+                <small>{agentSessionTurns.length} 条对话</small>
+              </header>
+              <div className="agentMessageList" ref={agentMessageListRef} aria-live="polite">
+              {visibleAgentTurns.length === 0 ? (
                 <p className="agentEmptySession">这个会话还没有对话。完成和删除的任务线不会出现在这里。</p>
-              ) : agentSessionTurns.map((turn) => (
+              ) : visibleAgentTurns.map((turn) => (
                 <article key={turn.id} className="agentTurn">
                   <div className="agentBubble user">
                     <small>你</small>
                     <p>{turn.userText}</p>
                   </div>
-                  <div className="agentBubble assistant">
-                    <small>{turn.source === "openai" ? `API · ${turn.model || settings.agentModel}` : turn.status === "failed" ? "发送失败" : "模型"}</small>
-                    <p>{turn.status === "failed" ? "模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。" : turn.assistantText || "等待模型回复..."}</p>
+                  <div className={`agentBubble assistant ${turn.status === "streaming" ? "streaming" : ""}`}>
+                    <small>{turn.status === "streaming" ? "Agent 正在回复" : turn.source === "openai" ? `API · ${turn.model || settings.agentModel}` : turn.status === "failed" ? "发送失败" : "模型"}</small>
+                    <p>{turn.status === "failed" ? "模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。" : turn.assistantText || (turn.status === "streaming" ? "正在思考" : "等待模型回复...")} {turn.status === "streaming" && <span className="agentCursor" aria-hidden="true" />}</p>
                   </div>
                 </article>
               ))}
+              </div>
             </div>
+            <form className="agentComposer" onSubmit={askAgent}>
+              <textarea
+                value={agentQuestion}
+                onChange={(event) => setAgentQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+                aria-label="Agent 消息"
+              />
+              <button className="primary agentSendButton" type="submit" disabled={!agentQuestion.trim() || agentLoading}>{agentLoading ? "生成中" : "发送"}</button>
+            </form>
           </div>
         </div>
       </aside>
@@ -1347,4 +1394,3 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
-

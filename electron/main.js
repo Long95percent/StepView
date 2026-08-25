@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
 import { createGateway } from "./gateway/createGateway.js";
+import { streamOpenAIChat } from "./openAiStream.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -158,6 +159,28 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());
   });
+  ipcMain.handle("agent:tools:list", () => gateway.getContext().toolRegistry.list());
+  ipcMain.handle("agent:tools:run", async (_event, request = {}) => {
+    const context = gateway.getContext();
+    const sessionId = request.sessionId || null;
+    const result = await context.toolRuntime.run(request.toolId, request.input || {}, {
+      accountId: context.accountId,
+      agentId: "user",
+      workspaceId: request.workspaceId || null,
+      sessionId,
+      boardStorage: context.boardStorage,
+      memoryRepository: context.memoryRepository,
+      audit: (event) => sessionId && context.agentSqliteStore.recordSignal?.({ sessionId, kind: "tool_run", payload: event }),
+    });
+    if (result.result?.type?.endsWith?.("_proposal")) return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    if (result.result?.type === "memory_upsert" || result.result?.type === "board_change") return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    return result;
+  });
+  ipcMain.handle("agent:approvals:list", () => { const context = gateway.getContext(); return context.approvalManager.list(context.accountId); });
+  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => { const context = gateway.getContext(); const entry = context.approvalManager.decide(request.approvalId, context.accountId, request.decision); if (entry.status === "approved" && entry.proposal.type === "memory_upsert") entry.appliedMemory = context.memoryRepository.upsert(entry.proposal.memory); return entry; });
+  ipcMain.handle("agent:memory:list", (_event, options = {}) => gateway.getContext().memoryRepository.list(options));
+  ipcMain.handle("agent:memory:feedback", (_event, request = {}) => gateway.getContext().memoryRepository.feedback(request.memoryId, request.action, { nextValue: request.nextValue, reason: request.reason }));
+  ipcMain.handle("agent:memory:evidence", (_event, request = {}) => gateway.getContext().memoryRepository.listEvidence(request.memoryId));
   ipcMain.handle("agent:load-session", async (_event, request = {}) =>
     serializeSessionView(await gateway.getContext().agentService.loadSessionView(request.sessionId)),
   );
@@ -204,6 +227,35 @@ app.whenReady().then(async () => {
           model: request.model || DEFAULT_OPENAI_MODEL,
           status: "failed",
         });
+        activeContext.agentService.refreshSessionWindow(sessionId);
+      }
+      throw error;
+    }
+  });
+  ipcMain.handle("agent:chat-stream", async (event, request = {}) => {
+    const activeContext = gateway.getContext();
+    const activeGeneration = gateway.getContextGeneration();
+    const userText = String(request.userText || "").trim();
+    const sessionId = String(request.sessionId || "").trim();
+    if (!userText) throw new Error("Agent message is empty.");
+    if (!sessionId || sessionId === "global") throw new Error("请选择一条活跃任务线会话。");
+    const memory = await loadCurrentBoardMemory();
+    activeContext.agentService.syncSessionsFromBoardMemory(memory);
+    const prepared = await activeContext.agentService.prepareChat({ sessionId, userText, boardMemory: memory, model: request.model || DEFAULT_OPENAI_MODEL });
+    try {
+      const result = await streamOpenAIChat({
+        apiKey: request.apiKey,
+        model: request.model,
+        baseUrl: request.baseUrl,
+        messages: prepared.prompt.messages,
+        onDelta: (delta) => event.sender.send("agent:chat-stream:event", { streamId: request.streamId, type: "delta", delta }),
+      });
+      if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");
+      const view = await activeContext.agentService.completeChat(prepared, { assistantText: result.text, model: result.model, source: "openai" });
+      return { text: result.text, model: result.model, sessionId, session: serializeSessionView(view) };
+    } catch (error) {
+      if (gateway.isCurrentContext(activeContext, activeGeneration)) {
+        activeContext.agentSqliteStore.completeTurn({ turnId: prepared.turn.turnId, assistantText: "", source: "openai-error", model: request.model || DEFAULT_OPENAI_MODEL, status: "failed" });
         activeContext.agentService.refreshSessionWindow(sessionId);
       }
       throw error;

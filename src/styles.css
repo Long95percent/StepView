@@ -1052,8 +1052,9 @@ button { cursor: pointer; }
 }
 .agentConversation {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
-  margin-top: 12px;
+  min-height: 0;
 }
 .agentConversation header {
   display: flex;
@@ -1077,7 +1078,7 @@ button { cursor: pointer; }
 .agentMessageList {
   display: grid;
   gap: 12px;
-  max-height: min(46vh, 430px);
+  min-height: 240px;
   padding: 12px;
   border: 1px solid rgba(255,255,255,.1);
   border-radius: 18px;
@@ -1125,6 +1126,23 @@ button { cursor: pointer; }
   border-color: rgba(196, 142, 255, .18);
   background: rgba(28, 24, 57, .5);
 }
+.agentBubble.assistant.streaming {
+  border-color: rgba(196, 142, 255, .34);
+  box-shadow: 0 0 24px rgba(140, 103, 255, .08);
+}
+.agentCursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 2px;
+  background: #cba7ff;
+  vertical-align: -2px;
+  animation: agentCursorBlink .8s steps(1) infinite;
+}
+@keyframes agentCursorBlink {
+  50% { opacity: .15; }
+}
 .agentDrawer {
   position: fixed;
   top: 0;
@@ -1154,7 +1172,7 @@ button { cursor: pointer; }
   position: absolute;
   right: 0;
   top: 0;
-  width: min(390px, 82vw);
+  width: min(440px, 92vw);
   height: 100vh;
   padding: 16px 20px 16px 16px;
   border-left: 1px solid rgba(255,255,255,.1);
@@ -1164,10 +1182,50 @@ button { cursor: pointer; }
   transition: transform .24s ease;
   backdrop-filter: blur(26px);
   pointer-events: auto;
-  overflow-y: auto;
+  overflow: hidden;
   scrollbar-width: thin;
 }
 .agentDrawer.open .agentDrawerPanel { transform: translateX(0); }
+.agentChatLayout {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  height: calc(100vh - 64px);
+  min-height: 0;
+  color-scheme: dark;
+}
+.agentChatLayout > label {
+  display: grid;
+  gap: 7px;
+  color: #aab9d4;
+  font-size: 12px;
+  font-weight: 750;
+}
+.agentChatLayout select,
+.agentComposer textarea {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 16px;
+  padding: 10px 11px;
+  color: #eef4ff;
+  background: linear-gradient(145deg, rgba(14, 19, 40, .98), rgba(8, 12, 29, .96));
+  box-shadow: inset 0 1px rgba(255,255,255,.08);
+}
+.agentChatLayout select { min-height: 40px; color-scheme: dark; }
+.agentChatLayout select option { color: #eef4ff; background: #0b1023; }
+.agentComposer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 9px;
+  padding-top: 2px;
+}
+.agentComposer textarea {
+  min-height: 52px;
+  max-height: 150px;
+  resize: vertical;
+}
+.agentSendButton { min-height: 52px; padding-inline: 16px; }
 .agentDrawerHeader {
   display: flex;
   align-items: center;

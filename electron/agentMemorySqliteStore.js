@@ -1,0 +1,45 @@
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
+const DB_FILE = "agent-memory.sqlite";
+const now = () => new Date().toISOString();
+const id = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+const json = (v, fallback = null) => JSON.stringify(v ?? fallback);
+const parse = (v, fallback = null) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+
+function schema(db) {
+  db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS memory_items (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT,
+    scope_type TEXT NOT NULL, scope_id TEXT NOT NULL, category TEXT NOT NULL, subcategory TEXT,
+    subject_key TEXT NOT NULL, statement TEXT NOT NULL, normalized_value_json TEXT,
+    source_type TEXT NOT NULL, source_ref TEXT, evidence_summary TEXT, confidence REAL NOT NULL DEFAULT 0,
+    importance REAL NOT NULL DEFAULT 0, stability REAL NOT NULL DEFAULT 0, sensitivity TEXT NOT NULL DEFAULT 'normal',
+    status TEXT NOT NULL DEFAULT 'candidate', valid_from TEXT, valid_until TEXT, last_confirmed_at TEXT,
+    last_recalled_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, extraction_version TEXT NOT NULL DEFAULT '1'
+  ); CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_dedupe ON memory_items(account_id, agent_id, scope_type, scope_id, subject_key, statement);
+  CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory_items(account_id, agent_id, scope_type, scope_id, status);
+  CREATE TABLE IF NOT EXISTS memory_evidence (id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, account_id TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT, quote_or_payload TEXT, polarity TEXT NOT NULL DEFAULT 'support', confidence REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS memory_feedback (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, memory_id TEXT NOT NULL, action TEXT NOT NULL, previous_value_json TEXT, next_value_json TEXT, reason TEXT, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS memory_relations (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, from_memory_id TEXT NOT NULL, to_memory_id TEXT NOT NULL, relation_type TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS memory_embeddings (memory_id TEXT NOT NULL, account_id TEXT NOT NULL, embedding_provider TEXT NOT NULL, embedding_model TEXT, vector_ref TEXT, content_hash TEXT, index_version TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, PRIMARY KEY(memory_id, embedding_provider));`);
+}
+
+export function createAgentMemorySqliteStore({ dataDir, dbPath = path.join(dataDir, DB_FILE), accountId, agentId = "user" } = {}) {
+  if (!dataDir || !accountId) throw new Error("dataDir and accountId are required.");
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true }); const db = new DatabaseSync(dbPath); schema(db);
+  const map = (r) => r && ({ ...r, accountId: r.account_id, agentId: r.agent_id, workspaceId: r.workspace_id, scopeType: r.scope_type, scopeId: r.scope_id, subjectKey: r.subject_key, normalizedValue: parse(r.normalized_value_json), sourceType: r.source_type, sourceRef: r.source_ref, confidence: r.confidence, importance: r.importance, stability: r.stability, createdAt: r.created_at, updatedAt: r.updated_at });
+  function assertScope(input = {}) { if (input.accountId && input.accountId !== accountId) throw new Error("Memory account scope mismatch."); if (input.agentId && input.agentId !== agentId) throw new Error("Memory agent scope mismatch."); }
+  function upsert(input) { assertScope(input); const t = now(); const memoryId = input.id || id("memory"); db.prepare(`INSERT INTO memory_items (id,account_id,agent_id,workspace_id,scope_type,scope_id,category,subcategory,subject_key,statement,normalized_value_json,source_type,source_ref,evidence_summary,confidence,importance,stability,sensitivity,status,valid_from,valid_until,last_confirmed_at,last_recalled_at,created_at,updated_at,extraction_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET statement=excluded.statement,normalized_value_json=excluded.normalized_value_json,confidence=excluded.confidence,importance=excluded.importance,stability=excluded.stability,status=excluded.status,updated_at=excluded.updated_at`).run(memoryId, accountId, agentId, input.workspaceId || null, input.scopeType || "user", input.scopeId || accountId, input.category || "semantic", input.subcategory || null, input.subjectKey || "general", input.statement || "", json(input.normalizedValue), input.sourceType || "conversation", input.sourceRef || null, input.evidenceSummary || null, input.confidence ?? 0, input.importance ?? 0, input.stability ?? 0, input.sensitivity || "normal", input.status || "candidate", input.validFrom || null, input.validUntil || null, input.lastConfirmedAt || null, null, input.createdAt || t, t, input.extractionVersion || "1"); return get(memoryId); }
+  function get(memoryId) { return map(db.prepare("SELECT * FROM memory_items WHERE id = ? AND account_id = ? AND agent_id = ?").get(memoryId, accountId, agentId)); }
+  function list(options = {}) { assertScope(options); const rows = db.prepare("SELECT * FROM memory_items WHERE account_id=? AND agent_id=? AND (? IS NULL OR scope_type=?) AND (? IS NULL OR status=?) ORDER BY updated_at DESC").all(accountId, agentId, options.scopeType || null, options.scopeType || null, options.status || null, options.status || null); return rows.map(map); }
+  function addEvidence(memoryId, evidence = {}) { const item = get(memoryId); if (!item) throw new Error("Memory not found."); db.prepare("INSERT INTO memory_evidence VALUES (?,?,?,?,?,?,?,?,?)").run(id("evidence"), memoryId, accountId, evidence.sourceType || "conversation", evidence.sourceRef || null, evidence.quoteOrPayload || "", evidence.polarity || "support", evidence.confidence ?? 0, now()); return listEvidence(memoryId); }
+  function listEvidence(memoryId) { return db.prepare("SELECT * FROM memory_evidence WHERE memory_id=? AND account_id=? ORDER BY created_at ASC").all(memoryId, accountId).map((r) => ({ id: r.id, memoryId: r.memory_id, sourceType: r.source_type, sourceRef: r.source_ref, quoteOrPayload: r.quote_or_payload, polarity: r.polarity, confidence: r.confidence, createdAt: r.created_at })); }
+  function relate(fromMemoryId, toMemoryId, relationType, confidence = 0) { if (!get(fromMemoryId) || !get(toMemoryId)) throw new Error("Memory not found."); db.prepare("INSERT INTO memory_relations VALUES (?,?,?,?,?,?,?)").run(id("relation"), accountId, fromMemoryId, toMemoryId, relationType, confidence, now()); return listRelations(fromMemoryId); }
+  function listRelations(memoryId) { return db.prepare("SELECT * FROM memory_relations WHERE account_id=? AND (from_memory_id=? OR to_memory_id=?) ORDER BY created_at ASC").all(accountId, memoryId, memoryId).map((r) => ({ id: r.id, fromMemoryId: r.from_memory_id, toMemoryId: r.to_memory_id, relationType: r.relation_type, confidence: r.confidence, createdAt: r.created_at })); }
+  function feedback(memoryId, action, { nextValue, reason } = {}) { const item = get(memoryId); if (!item) throw new Error("Memory not found."); const t = now(); db.prepare("INSERT INTO memory_feedback VALUES (?,?,?,?,?,?,?,?)").run(id("feedback"), accountId, memoryId, action, json(item.normalizedValue), json(nextValue), reason || null, t); if (action === "confirm") db.prepare("UPDATE memory_items SET status='active', last_confirmed_at=?, updated_at=? WHERE id=?").run(t, t, memoryId); if (action === "reject" || action === "snooze") db.prepare("UPDATE memory_items SET status=?, updated_at=? WHERE id=?").run(action === "reject" ? "deleted" : "expired", t, memoryId); if (action === "edit" && nextValue?.statement) db.prepare("UPDATE memory_items SET statement=?, normalized_value_json=?, updated_at=? WHERE id=?").run(nextValue.statement, json(nextValue.normalizedValue), t, memoryId); return get(memoryId); }
+  function search(query, options = {}) { assertScope(options); const terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean); return list(options).filter((item) => item.status !== "deleted" && terms.every((term) => `${item.statement} ${item.subjectKey} ${item.category}`.toLowerCase().includes(term))).slice(0, options.limit || 20); }
+  function remove(memoryId, reason = "user_delete") { const item = get(memoryId); if (!item) return false; db.prepare("UPDATE memory_items SET status='deleted', updated_at=? WHERE id=? AND account_id=? AND agent_id=?").run(now(), memoryId, accountId, agentId); db.prepare("INSERT INTO memory_feedback VALUES (?,?,?,?,?,?,?,?)").run(id("feedback"), accountId, memoryId, "delete", null, null, reason, now()); return true; }
+  function close() { db.close(); }
+  return { accountId, agentId, upsert, get, list, search, addEvidence, listEvidence, relate, listRelations, feedback, remove, close };
+}

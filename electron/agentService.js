@@ -197,8 +197,12 @@ export function createAgentService({
       sessionState: previousWindow.sessionState,
       updatedAt: previousWindow.updatedAt,
     };
-    await redisCache?.savePromptState?.(sessionId, prompt.promptState);
-    await redisCache?.saveWindowState?.(sessionId, windowState);
+    try {
+      await redisCache?.savePromptState?.(sessionId, prompt.promptState);
+      await redisCache?.saveWindowState?.(sessionId, windowState);
+    } catch (error) {
+      logger.warn?.("Failed to cache prepared Agent state in Redis", error);
+    }
 
     return { session, turn, prompt, mem0Memories: retrievedMemories, contextPack, boardMemory };
   }
@@ -260,7 +264,11 @@ export function createAgentService({
       Promise.resolve(memoryExtractor.extractAndStore(turn.userText, { sourceRef: turn.turnId }))
         .catch((error) => logger.warn?.("Memory extraction failed", error));
     }
-    await redisCache?.saveWindowState?.(prepared.session.sessionId, window);
+    try {
+      await redisCache?.saveWindowState?.(prepared.session.sessionId, window);
+    } catch (error) {
+      logger.warn?.("Failed to cache completed Agent state in Redis", error);
+    }
     return loadSessionView(prepared.session.sessionId);
   }
 

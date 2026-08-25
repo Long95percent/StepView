@@ -11,4 +11,8 @@ describe("network policy", () => {
     expect(validateNetworkPolicy({ mode: "family", host: "127.0.0.1" }).allowLan).toBe(false);
     expect(validateNetworkPolicy({ mode: "family", host: "192.168.1.5", allowLan: true }).allowLan).toBe(true);
   });
+  it("allows wildcard binding only inside the family container", () => {
+    expect(() => validateNetworkPolicy({ mode: "family", host: "0.0.0.0" })).toThrow();
+    expect(validateNetworkPolicy({ mode: "family", host: "0.0.0.0", containerized: true })).toMatchObject({ containerized: true });
+  });
 });

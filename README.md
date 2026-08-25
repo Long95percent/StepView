@@ -68,23 +68,60 @@ npm run desktop
 
 ### 家庭版网页端
 
-家庭版会同时启动网页和带账号隔离的 HTTP Gateway：
+家庭版网页由项目专属 Docker Compose 栈运行：
+
+- `web`：Nginx 托管 React 生产构建。
+- `gateway`：账号、Board、Agent 和流式模型接口。
+- `redis`：Prompt/窗口缓存，启用 AOF 持久化且不暴露宿主机端口。
 
 ```bash
 npm run family
 ```
 
-本机访问 `http://127.0.0.1:5173`。如需让家庭局域网内的手机或电脑访问，请在 `.env.local` 中显式填写本机局域网 IP：
+`family` 会检查 Docker Desktop、项目依赖、数据目录和端口，然后构建并启动整套服务。任一必需项不满足时会中止并给出修复方式。
 
-```dotenv
-STEPVIEW_MODE=family
-STEPVIEW_BIND_HOST=192.168.1.10
-STEPVIEW_ALLOW_LAN=true
-STEPVIEW_HTTP_PORT=3210
-VITE_STEPVIEW_API_URL=http://192.168.1.10:3210/api
+启动器使用 `--pull never`，不会自动连接镜像仓库或拉取镜像。所需基础镜像必须已存在于本机；缺失时会立即报错。需要更新镜像时由用户显式执行 `docker pull`。
+
+- Node.js 22 或更高版本，以及 Node SQLite 支持。
+- npm 核心依赖已完整安装。
+- StepView 数据目录可创建、写入和删除探测文件。
+- 前端 `5173` 端口和家庭 Gateway `3210` 端口未被占用。
+- `.env.local` 中的配置和 LAN 网络策略合法。
+- Docker Desktop 已启动且 Compose 可用。
+
+可以单独运行检查：
+
+```bash
+npm run preflight:family
 ```
 
-然后访问 `http://192.168.1.10:5173`。家庭账号、画布和 Agent 会话保存在 `.stepview-family-data`（可用 `STEPVIEW_DATA_DIR` 修改），网页端不再使用浏览器账号代替家庭后端。
+停止整套服务但保留容器和数据：
+
+```bash
+npm run family:stop
+```
+
+移除容器和项目网络但保留数据：
+
+```bash
+npm run family:down
+```
+
+查看服务日志：
+
+```bash
+npm run family:logs
+```
+
+账号、Board 和 SQLite 数据保存在 `.stepview-family-data`；Redis AOF 保存在 `.stepview-runtime/redis`。`family:stop` 和 `family:down` 都不会删除这些目录。
+
+本机默认访问 `http://127.0.0.1:5173`。如需让局域网设备访问，在项目根目录创建 `.env`：
+
+```dotenv
+STEPVIEW_BIND_ADDRESS=192.168.1.10
+```
+
+API Key 和用户自定义 Base URL 保存在浏览器设置中，启动脚本无法读取；模型连通性会在实际发送消息时校验并显示具体主机和网络错误。
 
 ## 构建发布包
 

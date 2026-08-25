@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
 import { createGateway } from "./gateway/createGateway.js";
+import { streamOpenAIChat } from "./openAiStream.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -226,6 +227,35 @@ app.whenReady().then(async () => {
           model: request.model || DEFAULT_OPENAI_MODEL,
           status: "failed",
         });
+        activeContext.agentService.refreshSessionWindow(sessionId);
+      }
+      throw error;
+    }
+  });
+  ipcMain.handle("agent:chat-stream", async (event, request = {}) => {
+    const activeContext = gateway.getContext();
+    const activeGeneration = gateway.getContextGeneration();
+    const userText = String(request.userText || "").trim();
+    const sessionId = String(request.sessionId || "").trim();
+    if (!userText) throw new Error("Agent message is empty.");
+    if (!sessionId || sessionId === "global") throw new Error("请选择一条活跃任务线会话。");
+    const memory = await loadCurrentBoardMemory();
+    activeContext.agentService.syncSessionsFromBoardMemory(memory);
+    const prepared = await activeContext.agentService.prepareChat({ sessionId, userText, boardMemory: memory, model: request.model || DEFAULT_OPENAI_MODEL });
+    try {
+      const result = await streamOpenAIChat({
+        apiKey: request.apiKey,
+        model: request.model,
+        baseUrl: request.baseUrl,
+        messages: prepared.prompt.messages,
+        onDelta: (delta) => event.sender.send("agent:chat-stream:event", { streamId: request.streamId, type: "delta", delta }),
+      });
+      if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");
+      const view = await activeContext.agentService.completeChat(prepared, { assistantText: result.text, model: result.model, source: "openai" });
+      return { text: result.text, model: result.model, sessionId, session: serializeSessionView(view) };
+    } catch (error) {
+      if (gateway.isCurrentContext(activeContext, activeGeneration)) {
+        activeContext.agentSqliteStore.completeTurn({ turnId: prepared.turn.turnId, assistantText: "", source: "openai-error", model: request.model || DEFAULT_OPENAI_MODEL, status: "failed" });
         activeContext.agentService.refreshSessionWindow(sessionId);
       }
       throw error;

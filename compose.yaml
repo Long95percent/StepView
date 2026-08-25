@@ -1,0 +1,55 @@
+name: stepview
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--protected-mode", "no"]
+    restart: unless-stopped
+    volumes:
+      - ./.stepview-runtime/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  gateway:
+    build:
+      context: .
+      target: gateway
+    restart: unless-stopped
+    environment:
+      STEPVIEW_MODE: family
+      STEPVIEW_GATEWAY: local
+      STEPVIEW_DATA_DIR: /data
+      STEPVIEW_BIND_HOST: 0.0.0.0
+      STEPVIEW_HTTP_PORT: 3210
+      STEPVIEW_CONTAINERIZED: "true"
+      STEPVIEW_ALLOW_REGISTRATION: ${STEPVIEW_ALLOW_REGISTRATION:-true}
+      STEPVIEW_SESSION_TTL_HOURS: ${STEPVIEW_SESSION_TTL_HOURS:-168}
+      REDIS_URL: redis://redis:6379/0
+      MEM0_API_KEY: ${MEM0_API_KEY:-}
+      MEM0_BASE_URL: ${MEM0_BASE_URL:-https://api.mem0.ai/v1}
+    volumes:
+      - ./.stepview-family-data:/data
+    ports:
+      - "${STEPVIEW_BIND_ADDRESS:-127.0.0.1}:3210:3210"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3210/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    ports:
+      - "${STEPVIEW_BIND_ADDRESS:-127.0.0.1}:5173:80"
+    depends_on:
+      gateway:
+        condition: service_healthy

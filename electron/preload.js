@@ -15,6 +15,16 @@ contextBridge.exposeInMainWorld("stepview", {
   loadAgentJournal: () => ipcRenderer.invoke("agent:load-journal"),
   loadAgentSession: (request) => ipcRenderer.invoke("agent:load-session", request),
   chatAgent: (request) => ipcRenderer.invoke("agent:chat", request),
+  chatAgentStream: (request, onDelta) => {
+    const streamId = globalThis.crypto.randomUUID();
+    const listener = (_event, message) => {
+      if (message?.streamId === streamId && message.type === "delta") onDelta(message.delta);
+    };
+    ipcRenderer.on("agent:chat-stream:event", listener);
+    return ipcRenderer.invoke("agent:chat-stream", { ...request, streamId }).finally(() => {
+      ipcRenderer.removeListener("agent:chat-stream:event", listener);
+    });
+  },
   listAgentTools: () => ipcRenderer.invoke("agent:tools:list"),
   runAgentTool: (request) => ipcRenderer.invoke("agent:tools:run", request),
   listAgentApprovals: () => ipcRenderer.invoke("agent:approvals:list"),

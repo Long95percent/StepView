@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildAgentMemory } from "../../src/agentMemory.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
+import { streamOpenAIChat } from "../openAiStream.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -62,7 +63,7 @@ async function askOpenAI({ apiKey, model, baseUrl, messages }) {
   return { text: payload.choices?.[0]?.message?.content?.trim() || "OpenAI returned an empty response.", model: selectedModel };
 }
 
-export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext } = {}) {
+export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat } = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
   const contexts = new Map();
@@ -79,12 +80,44 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     return { sessionId, account, context };
   }
 
+  async function streamAgent(request, response, origin) {
+    const { context } = authenticated(request);
+    const input = await readBody(request);
+    const userText = String(input.userText || "").trim();
+    const sessionId = String(input.sessionId || "").trim();
+    if (!userText || !sessionId || sessionId === "global") throw Object.assign(new Error("请选择一条活跃任务线会话。"), { statusCode: 400 });
+    await context.boardStorage.flushWrites();
+    const boardMemory = buildAgentMemory(await context.boardStorage.readBoard());
+    context.agentService.syncSessionsFromBoardMemory(boardMemory);
+    const prepared = await context.agentService.prepareChat({ sessionId, userText, boardMemory, model: input.model || "gpt-5.1" });
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": origin || "null",
+      Vary: "Origin",
+    });
+    const send = (event) => response.write(`data: ${JSON.stringify(event)}\n\n`);
+    try {
+      const result = await openAiStream({ ...input, messages: prepared.prompt.messages, onDelta: (delta) => send({ type: "delta", delta }) });
+      const view = await context.agentService.completeChat(prepared, { assistantText: result.text, model: result.model, source: "openai" });
+      send({ type: "complete", result: { text: result.text, model: result.model, sessionId, session: serializeSessionView(view) } });
+    } catch (error) {
+      context.agentSqliteStore.completeTurn({ turnId: prepared.turn.turnId, assistantText: "", source: "openai-error", model: input.model || "gpt-5.1", status: "failed" });
+      context.agentService.refreshSessionWindow(sessionId);
+      send({ type: "error", error: error.message || "Agent stream failed." });
+    } finally {
+      response.end();
+    }
+  }
+
   const server = http.createServer(async (request, response) => {
     const origin = request.headers.origin || "";
     if (request.method === "OPTIONS") return json(response, 204, {}, origin);
     const url = new URL(request.url, "http://gateway.local");
     try {
       if (request.method === "GET" && url.pathname === "/api/health") return json(response, 200, { ok: true, mode: "family" }, origin);
+      if (request.method === "POST" && url.pathname === "/api/agent/chat/stream") return await streamAgent(request, response, origin);
       if (request.method === "GET" && url.pathname === "/api/gateway") {
         const sessionId = sessionFrom(request);
         return json(response, 200, { mode: "family", account: accountStore.getAccountForSession(sessionId) }, origin);

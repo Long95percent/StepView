@@ -6,6 +6,8 @@
 
 StepView 当前是 Electron + React/Vite 应用。主进程负责 Gateway、账号上下文、Board 文件、Agent 会话、记忆仓库和工具权限；Renderer 只通过 preload 暴露的 IPC API 访问这些能力。
 
+家庭网页端当前以 Docker Compose 为主运行面：`web` 提供静态前端，`gateway` 提供账号、Board 与 Agent HTTP/SSE API，`redis` 提供缓存。Gateway 与 Redis 只通过项目内部网络通信；账号与 SQLite 数据挂载到 `.stepview-family-data`，Redis AOF 挂载到 `.stepview-runtime/redis`。
+
 核心原则：
 
 - Board 是用户画布事实来源，Agent 只能通过提案请求修改。

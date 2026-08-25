@@ -46,5 +46,37 @@ export function createBrowserGatewayApi() {
     saveBoard: (board) => request("/board", { method: "PUT", body: board }),
     loadAgentJournal: () => request("/agent/journal"),
     chatAgent: (input) => request("/agent/chat", { method: "POST", body: input }),
+    async chatAgentStream(input, onDelta) {
+      const response = await fetch(`${apiBaseUrl()}/agent/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sessionId ? { Authorization: `Bearer ${sessionId}` } : {}) },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Gateway request failed (${response.status}).`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let result;
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || "";
+        for (const block of blocks) {
+          const line = block.split(/\r?\n/).find((entry) => entry.startsWith("data:"));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(5).trim());
+          if (event.type === "delta") onDelta(event.delta);
+          if (event.type === "complete") result = event.result;
+          if (event.type === "error") throw new Error(event.error);
+        }
+        if (done) break;
+      }
+      if (!result) throw new Error("Agent stream ended before completion.");
+      return result;
+    },
   };
 }

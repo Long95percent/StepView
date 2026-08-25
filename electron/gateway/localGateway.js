@@ -16,7 +16,7 @@ export function createLocalGateway({
 } = {}) {
   if (!config) throw new Error("Gateway config is required.");
   if (!appDataDir) throw new Error("Gateway appDataDir is required.");
-  validateNetworkPolicy({ mode: config.mode, host: config.bindHost || "127.0.0.1", allowLan: config.allowLan, enableUpnp: config.enableUpnp });
+  validateNetworkPolicy({ mode: config.mode, host: config.bindHost || "127.0.0.1", allowLan: config.allowLan, enableUpnp: config.enableUpnp, containerized: config.containerized });
   let context;
   let accountStore;
   let sessionId;

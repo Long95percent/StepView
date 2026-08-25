@@ -82,6 +82,49 @@ describe("agent service", () => {
     expect(redisCalls[0].state).toMatchObject({ sessionId: `task:${task.id}`, taskLineId: task.id });
   });
 
+  it("continues preparing chat when optional Redis cache is unavailable", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-service-redis-fallback-"));
+    sqliteStore = createAgentSqliteStore({ dataDir: tempDir });
+    const redisError = new Error("connect ECONNREFUSED 127.0.0.1:6379");
+    const redisCache = {
+      savePromptState: async () => { throw redisError; },
+      saveWindowState: async () => { throw redisError; },
+      loadPromptState: async () => null,
+      loadWindowState: async () => null,
+    };
+    const service = createAgentService({ sqliteStore, redisCache, mem0Client: createMem0Client(), logger: { warn: () => {} } });
+    const task = buildTask("offline cache fallback", { x: 700, y: 300 });
+    const boardMemory = buildAgentMemory(normalizeBoard({ tasks: [task], stickers: [] }));
+    service.syncSessionsFromBoardMemory(boardMemory);
+
+    await expect(service.prepareChat({
+      sessionId: `task:${task.id}`,
+      userText: "继续下一步",
+      boardMemory,
+      model: "gpt-5.1",
+    })).resolves.toMatchObject({ turn: { userText: "继续下一步" } });
+  });
+
+  it("returns the completed answer when Redis fails during completion", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-service-redis-complete-fallback-"));
+    sqliteStore = createAgentSqliteStore({ dataDir: tempDir });
+    const redisCache = {
+      savePromptState: async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:6379"); },
+      saveWindowState: async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:6379"); },
+      loadPromptState: async () => null,
+      loadWindowState: async () => null,
+    };
+    const service = createAgentService({ sqliteStore, redisCache, mem0Client: createMem0Client(), logger: { warn: () => {} } });
+    const task = buildTask("complete without redis", { x: 700, y: 300 });
+    const boardMemory = buildAgentMemory(normalizeBoard({ tasks: [task], stickers: [] }));
+    service.syncSessionsFromBoardMemory(boardMemory);
+    const prepared = await service.prepareChat({ sessionId: `task:${task.id}`, userText: "回答后收尾", boardMemory, model: "gpt-5.1" });
+
+    await expect(service.completeChat(prepared, { assistantText: "回答已经生成。", model: "gpt-5.1" })).resolves.toMatchObject({
+      turns: [expect.objectContaining({ assistantText: "回答已经生成。", status: "complete" })],
+    });
+  });
+
   it("completes the same turn and syncs mem0 and session windows", async () => {
     const { service, mem0Calls } = await makeService();
     const task = buildTask("launch product", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));

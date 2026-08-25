@@ -14,6 +14,8 @@ const DEFAULTS = {
   bindHost: "127.0.0.1",
   allowLan: false,
   enableUpnp: false,
+  redisUrl: "redis://127.0.0.1:6379/0",
+  containerized: false,
 };
 
 function parseEnvFile(contents) {
@@ -71,6 +73,8 @@ export function loadConfig({ env = process.env, envFilePath = path.resolve(proce
     bindHost: values.STEPVIEW_BIND_HOST || DEFAULTS.bindHost,
     allowLan: booleanValue(values.STEPVIEW_ALLOW_LAN ?? DEFAULTS.allowLan, "STEPVIEW_ALLOW_LAN"),
     enableUpnp: booleanValue(values.STEPVIEW_ENABLE_UPNP ?? DEFAULTS.enableUpnp, "STEPVIEW_ENABLE_UPNP"),
+    redisUrl: values.REDIS_URL || DEFAULTS.redisUrl,
+    containerized: booleanValue(values.STEPVIEW_CONTAINERIZED ?? DEFAULTS.containerized, "STEPVIEW_CONTAINERIZED"),
   };
 }
 

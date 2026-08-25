@@ -17,10 +17,11 @@ describe("gateway config", () => {
         STEPVIEW_ALLOW_REGISTRATION: "false",
         STEPVIEW_SESSION_TTL_HOURS: "24",
         STEPVIEW_HTTP_PORT: "4321",
+        REDIS_URL: "redis://cache.local:6380/1",
       },
       envFilePath: "/missing/.env.local",
     });
-    expect(config).toMatchObject({ mode: "family", allowRegistration: false, sessionTtlHours: 24, httpPort: 4321 });
+    expect(config).toMatchObject({ mode: "family", allowRegistration: false, sessionTtlHours: 24, httpPort: 4321, redisUrl: "redis://cache.local:6380/1" });
   });
 
   it("rejects invalid mode and numeric settings", () => {

@@ -45,9 +45,13 @@
     "dependencies": {
         "@vitejs/plugin-react": "latest",
         "cross-env": "latest",
+        "katex": "^0.18.4",
         "npm-run-all": "latest",
         "react": "latest",
         "react-dom": "latest",
+        "react-markdown": "^10.1.0",
+        "rehype-katex": "^7.0.1",
+        "remark-math": "^6.0.0",
         "vite": "latest",
         "vitest": "latest",
         "wait-on": "latest"

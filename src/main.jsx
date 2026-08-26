@@ -37,6 +37,10 @@ import {
 } from "./progressCore";
 import { buildAgentMemory } from "./agentMemory";
 import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId } from "./agentSessionUi";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
 import "./styles.css";
 
@@ -1215,7 +1219,7 @@ function App() {
                   </div>
                   <div className={`agentBubble assistant ${turn.status === "streaming" ? "streaming" : ""}`}>
                     <small>{turn.status === "streaming" ? "Agent 正在回复" : turn.source === "openai" ? `API · ${turn.model || settings.agentModel}` : turn.status === "failed" ? "发送失败" : "模型"}</small>
-                    <p>{turn.status === "failed" ? "模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。" : turn.assistantText || (turn.status === "streaming" ? "正在思考" : "等待模型回复...")} {turn.status === "streaming" && <span className="agentCursor" aria-hidden="true" />}</p>
+                    <div className="agentMarkdown">{turn.status === "failed" ? <p>模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。</p> : <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{turn.assistantText || (turn.status === "streaming" ? "正在思考" : "等待模型回复...")}</ReactMarkdown>} {turn.status === "streaming" && <span className="agentCursor" aria-hidden="true" />}</div>
                   </div>
                 </article>
               ))}

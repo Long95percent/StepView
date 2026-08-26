@@ -43,6 +43,8 @@ export function createBrowserGatewayApi() {
       }
     },
     loadBoard: () => request("/board"),
+    loadSettings: () => request("/settings"),
+    saveSettings: (settings) => request("/settings", { method: "PUT", body: settings }),
     saveBoard: (board) => request("/board", { method: "PUT", body: board }),
     loadAgentJournal: () => request("/agent/journal"),
     chatAgent: (input) => request("/agent/chat", { method: "POST", body: input }),

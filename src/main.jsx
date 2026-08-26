@@ -203,11 +203,21 @@ function App() {
   }, []);
 
   React.useEffect(() => {
+    if (gatewayInfo?.mode !== "family" || !desktopApi?.loadSettings) return;
+    desktopApi.loadSettings().then((saved) => {
+      const next = { ...DEFAULT_SETTINGS, ...saved };
+      setSettings(next);
+      setSettingsDraft(next);
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    }).catch((error) => console.error("Failed to load shared settings", error));
+  }, [gatewayInfo]);
+
+  React.useEffect(() => {
     if (gatewayInfo?.mode !== "family" || !gatewayInfo.account || !desktopApi?.listAccounts) return;
     desktopApi.listAccounts().then(setAccounts).catch((error) => console.error("Failed to load accounts", error));
   }, [gatewayInfo]);
 
-  const saveSettings = (event) => {
+  const saveSettings = async (event) => {
     event.preventDefault();
     const nextSettings = {
       agentModel: settingsDraft.agentModel.trim() || DEFAULT_SETTINGS.agentModel,
@@ -215,6 +225,7 @@ function App() {
       openaiBaseUrl: settingsDraft.openaiBaseUrl.trim() || DEFAULT_SETTINGS.openaiBaseUrl,
     };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+    if (gatewayInfo?.mode === "family" && desktopApi?.saveSettings) await desktopApi.saveSettings(nextSettings);
     setSettings(nextSettings);
     setSettingsOpen(false);
     setToast("设置已保存。");

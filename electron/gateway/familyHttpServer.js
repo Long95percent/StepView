@@ -122,6 +122,16 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         const sessionId = sessionFrom(request);
         return json(response, 200, { mode: "family", account: accountStore.getAccountForSession(sessionId) }, origin);
       }
+      if (request.method === "GET" && url.pathname === "/api/settings") {
+        authenticated(request);
+        return json(response, 200, { openaiApiKey: accountStore.getSetting("openaiApiKey"), openaiBaseUrl: accountStore.getSetting("openaiBaseUrl"), agentModel: accountStore.getSetting("agentModel") }, origin);
+      }
+      if (request.method === "PUT" && url.pathname === "/api/settings") {
+        authenticated(request);
+        const input = await readBody(request);
+        for (const key of ["openaiApiKey", "openaiBaseUrl", "agentModel"]) if (input[key] !== undefined) accountStore.setSetting(key, input[key]);
+        return json(response, 200, { ok: true }, origin);
+      }
       if (request.method === "POST" && url.pathname === "/api/accounts/register") {
         if (!config.allowRegistration) throw Object.assign(new Error("Registration is disabled."), { statusCode: 403 });
         const input = await readBody(request);
@@ -140,7 +150,7 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         const { context } = authenticated(request);
         await context.boardStorage.flushWrites();
         context.agentService.syncSessionsFromBoardMemory(buildAgentMemory(await context.boardStorage.readBoard()));
-        return json(response, 200, serializeSessionViews(context.agentService.listSessionViews()), origin);
+        return json(response, 200, serializeSessionViews(await context.agentService.listSessionViews()), origin);
       }
       if (request.method === "POST" && url.pathname === "/api/agent/chat") {
         const { context } = authenticated(request);

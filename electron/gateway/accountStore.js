@@ -63,6 +63,11 @@ export function createAccountStore({ dataDir, dbPath = path.join(dataDir, "gatew
       expires_at TEXT NOT NULL,
       last_used_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS gateway_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   function registerAccount({ username, password, displayName = username }) {
@@ -130,9 +135,18 @@ export function createAccountStore({ dataDir, dbPath = path.join(dataDir, "gatew
     return db.prepare("SELECT * FROM accounts WHERE status = 'active' ORDER BY created_at ASC").all().map(accountFromRow);
   }
 
+  function getSetting(key) {
+    return db.prepare("SELECT value FROM gateway_settings WHERE key = ?").get(String(key))?.value || "";
+  }
+
+  function setSetting(key, value) {
+    db.prepare("INSERT INTO gateway_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(String(key), String(value ?? ""), nowIso());
+    return String(value ?? "");
+  }
+
   function close() {
     db.close();
   }
 
-  return { dbPath, registerAccount, login, createSession, getAccountForSession, logout, listAccounts, close };
+  return { dbPath, registerAccount, login, createSession, getAccountForSession, logout, listAccounts, getSetting, setSetting, close };
 }

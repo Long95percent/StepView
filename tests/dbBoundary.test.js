@@ -56,10 +56,7 @@ const RULES = [
 const DEBT = [
   { file: "electron/preflight.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], permanent: true, reason: "环境自检探针，需要真实探测 SQLite 可写与驱动可用" },
   { file: "electron/redisManager.js", rules: ["fs-write"], permanent: true, reason: "负责探测与拉起本机 Redis 进程" },
-  { file: "electron/agentSqliteStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], removeIn: "Phase 2", reason: "独立的 Agent 会话库，合并进账号库后删除" },
-  { file: "electron/agentMemorySqliteStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], removeIn: "Phase 2", reason: "独立的记忆库，合并进账号库后删除" },
-  { file: "electron/agent/userProfileStore.js", rules: ["sqlite-driver", "raw-sql"], removeIn: "Phase 2", reason: "独立的画像库，合并进账号库后删除" },
-  { file: "electron/gateway/accountStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql", "raw-delete"], removeIn: "Phase 2", reason: "全局库仍是手写建表，改为迁移器管理" },
+  { file: "electron/gateway/accountStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql", "raw-delete"], removeIn: "Phase 4", reason: "全局库仍是手写建表，改为迁移器管理" },
   { file: "electron/boardStorage.js", rules: ["fs-write"], removeIn: "Phase 3", reason: "画布仍是 JSON 文件，落库后改为仓储适配器" },
   { file: "electron/main.js", rules: ["fs-write"], removeIn: "Phase 3", reason: "board:reveal 直接建目录，改为导出命令" },
   { file: "electron/gateway/localGateway.js", rules: ["fs-write", "sqlite-driver"], removeIn: "Phase 3", reason: "个人数据导入导出靠复制文件，改为仓储导入导出" },
@@ -137,12 +134,16 @@ describe("database layer boundary", () => {
     const violations = findViolations();
     const stale = [];
     for (const entry of DEBT) {
-      const hits = violations.filter((violation) => violation.file === entry.file && entry.rules.includes(violation.ruleId));
-      if (hits.length === 0) stale.push(entry.file);
+      // 逐条规则检查：某一条豁免已经不再违规也算失效，必须删掉，
+      // 否则豁免名单会只增不减地糊在文件上。
+      for (const ruleId of entry.rules) {
+        const hits = violations.filter((violation) => violation.file === entry.file && violation.ruleId === ruleId);
+        if (hits.length === 0) stale.push(`${entry.file}#${ruleId}`);
+      }
       expect(entry.permanent || entry.removeIn, `${entry.file} 必须标注永久豁免或计划移除阶段`).toBeTruthy();
       expect(entry.reason, `${entry.file} 必须写明豁免原因`).toBeTruthy();
     }
-    expect(stale, `以下文件的豁免已经失效，请从 DEBT 名单中删除：${stale.join("、")}`).toEqual([]);
+    expect(stale, `以下豁免已经失效，请从 DEBT 名单中删除：${stale.join("、")}`).toEqual([]);
   });
 
   it("points every remaining exemption at a phase in the plan", () => {

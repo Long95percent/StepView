@@ -4,16 +4,19 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMem0Client } from "../electron/agentMem0Client.js";
 import { createAgentService } from "../electron/agentService.js";
-import { createAgentSqliteStore } from "../electron/agentSqliteStore.js";
+import { openAccountDatabase } from "../electron/db/index.js";
+import { createAgentSessionRepository } from "../electron/db/repositories/agentSessionRepository.js";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { buildTask, normalizeBoard } from "../src/progressCore.js";
 
 describe("agent service", () => {
   let tempDir;
   let sqliteStore;
+  let database;
 
   afterEach(async () => {
-    sqliteStore?.close();
+    database?.close();
+    database = undefined;
     sqliteStore = undefined;
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = undefined;
@@ -21,7 +24,8 @@ describe("agent service", () => {
 
   async function makeService() {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-service-"));
-    sqliteStore = createAgentSqliteStore({ dataDir: tempDir });
+    database = openAccountDatabase({ dataDir: tempDir });
+    sqliteStore = createAgentSessionRepository({ connection: database });
     const redisCalls = [];
     const redisCache = {
       savePromptState: async (sessionId, state) => {
@@ -84,7 +88,8 @@ describe("agent service", () => {
 
   it("continues preparing chat when optional Redis cache is unavailable", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-service-redis-fallback-"));
-    sqliteStore = createAgentSqliteStore({ dataDir: tempDir });
+    database = openAccountDatabase({ dataDir: tempDir });
+    sqliteStore = createAgentSessionRepository({ connection: database });
     const redisError = new Error("connect ECONNREFUSED 127.0.0.1:6379");
     const redisCache = {
       savePromptState: async () => { throw redisError; },
@@ -107,7 +112,8 @@ describe("agent service", () => {
 
   it("returns the completed answer when Redis fails during completion", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-service-redis-complete-fallback-"));
-    sqliteStore = createAgentSqliteStore({ dataDir: tempDir });
+    database = openAccountDatabase({ dataDir: tempDir });
+    sqliteStore = createAgentSessionRepository({ connection: database });
     const redisCache = {
       savePromptState: async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:6379"); },
       saveWindowState: async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:6379"); },

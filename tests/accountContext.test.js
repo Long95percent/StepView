@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +18,28 @@ describe("account context", () => {
     context = createAccountContext({ account: { accountId: "account-a", username: "alice" }, accountsDir: tempDir });
     expect(context.dataDir).toBe(path.join(tempDir, "account-a"));
     expect(context.boardStorage.boardPath()).toBe(path.join(tempDir, "account-a", "stepview-board.json"));
-    expect(context.agentSqliteStore.dbPath).toBe(path.join(tempDir, "account-a", "stepview-agent.sqlite"));
+    expect(context.agentSqliteStore.dbPath).toBe(path.join(tempDir, "account-a", "stepview.sqlite"));
+  });
+
+  it("keeps a single database per account instead of one per subsystem", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-context-single-"));
+    context = createAccountContext({ account: { accountId: "account-a", username: "alice" }, accountsDir: tempDir });
+    context.agentSqliteStore.ensureSession({ sessionId: "task:t1", taskLineId: "t1", title: "考研" });
+    context.memoryRepository.upsert({ statement: "喜欢早上工作" });
+
+    const files = await readdir(path.join(tempDir, "account-a"));
+    expect(files.filter((name) => name.endsWith(".sqlite"))).toEqual(["stepview.sqlite"]);
+  });
+
+  it("supports the personal layout where the data dir is the account dir", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-context-personal-"));
+    context = createAccountContext({
+      account: { id: "local-personal", accountId: "local-personal" },
+      dataDir: tempDir,
+      mode: "personal",
+    });
+    expect(context.mode).toBe("personal");
+    expect(context.dataDir).toBe(tempDir);
+    expect(context.agentSqliteStore.dbPath).toBe(path.join(tempDir, "stepview.sqlite"));
   });
 });

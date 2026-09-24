@@ -1,8 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-const DB_FILE = "stepview-agent.sqlite";
 
 function nowIso() {
   return new Date().toISOString();
@@ -78,90 +73,16 @@ function rowToWindow(row) {
   };
 }
 
-function initializeSchema(db) {
-  db.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-
-    CREATE TABLE IF NOT EXISTS agent_sessions (
-      session_id TEXT PRIMARY KEY,
-      task_line_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      persona_text TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS agent_turns (
-      turn_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-      user_text TEXT NOT NULL,
-      assistant_text TEXT NOT NULL DEFAULT '',
-      route_json TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'pending',
-      model TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_agent_turns_session_created
-      ON agent_turns(session_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS agent_session_windows (
-      session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-      recent_turn_ids_json TEXT NOT NULL DEFAULT '[]',
-      rolling_summary_text TEXT NOT NULL DEFAULT '',
-      rolling_summary_turn_ids_json TEXT NOT NULL DEFAULT '[]',
-      session_state_json TEXT NOT NULL DEFAULT '{}',
-      prompt_state_json TEXT NOT NULL DEFAULT '{}',
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS agent_signals (
-      signal_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-      turn_id TEXT REFERENCES agent_turns(turn_id) ON DELETE SET NULL,
-      kind TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_agent_signals_session_created
-      ON agent_signals(session_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS agent_prompt_snapshots (
-      snapshot_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-      turn_id TEXT REFERENCES agent_turns(turn_id) ON DELETE SET NULL,
-      prompt_json TEXT NOT NULL,
-      system_prompt TEXT NOT NULL,
-      user_prompt TEXT NOT NULL,
-      model TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_agent_prompt_snapshots_session_created
-      ON agent_prompt_snapshots(session_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS agent_mem0_sync_log (
-      sync_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
-      turn_id TEXT REFERENCES agent_turns(turn_id) ON DELETE SET NULL,
-      action TEXT NOT NULL,
-      mem0_id TEXT,
-      metadata_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `);
-}
-
-export function createAgentSqliteStore({ dataDir, dbPath = path.join(dataDir, DB_FILE) }) {
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  initializeSchema(db);
+/**
+ * Agent 会话仓储。
+ *
+ * 查询逻辑与重构前的 stepview-agent.sqlite 模块逐字一致，只是不再自己打开数据库文件：
+ * 账号库由 electron/db 统一持有，所有表在同一个连接和同一个事务里。
+ */
+export function createAgentSessionRepository({ connection } = {}) {
+  if (!connection?.db) throw new Error("Agent session repository requires a database connection.");
+  const db = connection.db;
+  const dbPath = connection.dbPath;
 
   const ensureSessionStatement = db.prepare(`
     INSERT INTO agent_sessions (session_id, task_line_id, title, persona_text, status, created_at, updated_at)
@@ -404,10 +325,6 @@ export function createAgentSqliteStore({ dataDir, dbPath = path.join(dataDir, DB
     };
   }
 
-  function close() {
-    db.close();
-  }
-
   return {
     dbPath,
     ensureSession,
@@ -424,7 +341,6 @@ export function createAgentSqliteStore({ dataDir, dbPath = path.join(dataDir, DB
     recordPromptSnapshot,
     logMem0Sync,
     loadSessionBundle,
-    close,
   };
 }
 

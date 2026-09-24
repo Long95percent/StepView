@@ -2,9 +2,9 @@ import path from "node:path";
 import { createMem0Client } from "../agentMem0Client.js";
 import { createRedisAgentCache } from "../agentRedisClient.js";
 import { createAgentService } from "../agentService.js";
-import { createAgentSqliteStore } from "../agentSqliteStore.js";
+import { createAgentSessionRepository } from "../db/repositories/agentSessionRepository.js";
 import { createBoardStorage } from "../boardStorage.js";
-import { createAgentMemorySqliteStore } from "../agentMemorySqliteStore.js";
+import { createAgentMemoryRepository } from "../db/repositories/agentMemoryRepository.js";
 import { createMemoryPluginManager } from "../agent/memoryPluginManager.js";
 import { createMemoryExtractor } from "../agent/memoryExtractor.js";
 import { createMemoryWriter } from "../agent/memoryWriter.js";
@@ -25,7 +25,7 @@ export function createAccountContext({
   dataDir: explicitDataDir,
   mode = "family",
   boardStorageFactory = createBoardStorage,
-  agentSqliteStoreFactory = createAgentSqliteStore,
+  agentSessionRepositoryFactory = createAgentSessionRepository,
   redisCacheFactory = createRedisAgentCache,
   mem0ClientFactory = createMem0Client,
   agentServiceFactory = createAgentService,
@@ -36,8 +36,8 @@ export function createAccountContext({
   const database = databaseFactory({ dataDir });
   const approvalRepository = createApprovalRepository({ connection: database });
   const boardStorage = boardStorageFactory({ dataDir });
-  const agentSqliteStore = agentSqliteStoreFactory({ dataDir });
-  const memoryRepository = createAgentMemorySqliteStore({ dataDir, accountId: account.accountId });
+  const agentSqliteStore = agentSessionRepositoryFactory({ connection: database });
+  const memoryRepository = createAgentMemoryRepository({ connection: database, accountId: account.accountId });
   const memoryPlugins = createMemoryPluginManager();
   const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
   const memoryWriter = createMemoryWriter({ repository: memoryRepository });
@@ -80,9 +80,7 @@ export function createAccountContext({
     async close() {
       await boardStorage.flushWrites();
       await redisCache?.close?.();
-      agentSqliteStore.close();
       memoryPlugins.close();
-      memoryRepository.close();
       database.close();
     },
   };

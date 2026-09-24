@@ -317,19 +317,22 @@ CREATE INDEX idx_diary_links_target ON diary_links(account_id, target_type, targ
 
 **计划外的必要改动**：`proposalsDir()` 与 `historyDir()` 被移除。数据已经不在文件里了，继续保留这两个方法只会误导调用方。受影响的断言同步改成了表查询。
 
-### Phase 2：合并三个 SQLite
+### Phase 2：合并三个 SQLite ✅ 已完成
 
-- [ ] 迁移 `0003-agent.sql`：把 `agent_sessions`、`agent_turns`、`agent_session_windows`、`agent_signals`、`agent_prompt_snapshots`、`agent_mem0_sync_log` 建到账号库。
-- [ ] 迁移 `0004-memory.sql`：把 `memory_items`、`memory_evidence`、`memory_feedback`、`memory_relations`、`memory_embeddings` 建到账号库。
-- [ ] 迁移 `0005-profile.sql`：把 `profile_items` 建到账号库。
-- [ ] 新建 `agentSessionRepository.js`、`agentMemoryRepository.js`、`userProfileRepository.js`，方法签名对齐现有模块（`agentSqliteStore` / `agentMemorySqliteStore` / `userProfileStore` 的对外接口）。
-- [ ] 一次性数据导入：从 `stepview-agent.sqlite`、`agent-memory.sqlite`、`user-profile.sqlite` 复制进账号库，用 `INSERT OR IGNORE` 保证幂等，旧库文件重命名为 `*.migrated` 保留。
-- [ ] 删除三个旧 store 模块及其独立连接，`createAccountContext` 只保留一个数据库句柄。
-- [ ] 测试：迁移后行数一致；重复迁移不产生重复行；账号库与旧库数据可比对。
-- [ ] 验证：`npm test`。
-- [ ] 提交：`refactor: merge account sqlite stores into one database`
+- [x] 迁移 `0003-agent.sql`、`0004-memory.sql`、`0005-profile.sql`：三张旧库的表结构**逐字复制**进账号库，保证历史数据可以整表搬运。迁移文件里的 `PRAGMA` 已去掉——迁移在事务内执行，`journal_mode` 在事务里改不了，连接层已经统一设置过。
+- [x] `electron/agentSqliteStore.js` → `electron/db/repositories/agentSessionRepository.js`、`electron/agentMemorySqliteStore.js` → `agentMemoryRepository.js`、`electron/agent/userProfileStore.js` → `userProfileRepository.js`。**查询逻辑一行未改**，只把"自己打开数据库文件"换成"用注入的连接"，并去掉各自的 `close()`——连接现在归账号库统一持有。
+- [x] 一次性数据导入：用 `ATTACH DATABASE` + 按主键精确去重把旧库整表搬进账号库，旧文件改名为 `*.migrated` 保留（含 `-wal` / `-shm`）。
+- [x] 删除三个旧模块及其独立连接，`createAccountContext` 只保留一个数据库句柄。
+- [x] 测试：三库行数与内容比对；重复启动不产生重复行；缺列的旧表按列交集导入；搬不动的表**显式报错并保留旧库**、下次启动重试；`.migrated` 副本仍可打开核对。
 
-这是重构里风险最高的一步，务必确认数据比对通过再删旧文件。
+**两个必须记住的实现细节**
+
+1. **不要用 `INSERT OR IGNORE` 搬数据。** 它会把违反约束的行一起吞掉，直接变成静默丢数据。改成 `INSERT ... WHERE NOT EXISTS`（按主键去重），真正的错误老老实实抛出来：该表标记为失败、旧库保持原样、不写完成标记，下次启动继续重试。宁可报错也不能悄悄少数据。
+2. **个人模式的数据目录没有变。** 家庭模式是 `accountsDir/<accountId>`，个人模式仍然是 `dataDir` 本身，否则升级后用户会找不到自己原来的画布。
+
+**有意的偏差**：旧 Agent 会话表的表结构里没有 `account_id` 列，这次也**没有补**。账号库本身就是每账号一个文件，补一列冗余的 `account_id` 需要改动十几条语句，收益只有象征意义，不值得在这次搬迁里冒这个风险。记忆表和画像表本来就有 `account_id`，保持原样。如果以后要做跨账号共享实例，再单独加。
+
+**顺带发现（未修）**：`agentService` 里读的 `sqliteStore.accountId` 一直是 `undefined`，因为旧 `createAgentSqliteStore` 的返回值里根本没有这个字段。补上它会立刻触发记忆仓储的账号校验，可能让现有提取流程抛错，属于另一个独立问题，这里只记录不处理。
 
 ### Phase 3：画布落库
 

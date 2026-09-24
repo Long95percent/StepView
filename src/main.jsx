@@ -880,8 +880,8 @@ function App() {
 
         <section>
           <h2>💾 Save</h2>
-          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local file ✅"}</p>
-          {desktopApi.revealDataFile && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
+          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local database ✅"}</p>
+          {desktopApi.revealDataFile && <button className="ghost" title="Export the current board as a JSON file and show it in the folder" onClick={() => desktopApi.revealDataFile()}>Export board 📂</button>}
           <button className="danger wide" onClick={clearBoard}>Clear 🧹</button>
         </section>
       </aside>

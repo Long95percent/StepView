@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { normalizeBoard } from "../../src/progressCore.js";
 import { createApprovalRepository } from "../db/repositories/approvalRepository.js";
 import {
@@ -18,16 +17,8 @@ export const DEFAULT_MAX_PROPOSALS = DEFAULT_MAX_PENDING_APPROVALS;
 export const DEFAULT_MAX_SNAPSHOTS = DEFAULT_MAX_SNAPSHOTS_COUNT;
 export const DEFAULT_PROPOSAL_TTL_MS = DEFAULT_APPROVAL_TTL_DAYS * 24 * 60 * 60 * 1000;
 
-export function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-}
-
-export function boardHash(board) {
-  return createHash("sha256").update(canonicalJson(normalizeBoard(board))).digest("hex");
-}
+export { boardHash, canonicalJson } from "../db/boardHash.js";
+import { boardHash } from "../db/boardHash.js";
 
 export function isProposalId(value) {
   return PROPOSAL_ID_PATTERN.test(String(value || ""));

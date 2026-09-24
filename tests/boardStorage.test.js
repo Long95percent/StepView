@@ -65,4 +65,44 @@ describe("board storage", () => {
 
     await expect(storage.writeBoard({ tasks: [{ id: "task-2" }] })).resolves.toMatchObject({ ok: true });
   });
+
+  it("treats the database as the source of truth after the first import", async () => {
+    const storage = await makeStore();
+    const board = { tasks: [{ id: "task-1" }], stickers: [], links: [], branches: [], achievements: [], agentMemory: null };
+
+    await writeFile(path.join(tempDir, "stepview-board.json"), JSON.stringify(board), "utf8");
+    await expect(storage.readBoard()).resolves.toMatchObject({ tasks: [{ id: "task-1" }] });
+
+    // 导入之后外部再改 JSON 文件不该影响画布：权威副本已经在库里了。
+    await writeFile(path.join(tempDir, "stepview-board.json"), JSON.stringify({ tasks: [{ id: "task-2" }] }), "utf8");
+    await expect(storage.readBoard()).resolves.toMatchObject({ tasks: [{ id: "task-1" }] });
+    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual({ tasks: [{ id: "task-2" }] });
+  });
+
+  it("keeps the board in the database even when the exported file is gone", async () => {
+    const storage = await makeStore();
+    await storage.writeBoard({ tasks: [{ id: "task-1" }] });
+
+    await rm(path.join(tempDir, "stepview-board.json"), { force: true });
+    await expect(storage.readBoard()).resolves.toMatchObject({ tasks: [{ id: "task-1" }] });
+  });
+
+  it("persists the board across storage instances through the account database", async () => {
+    const storage = await makeStore();
+    await storage.writeBoard({ tasks: [{ id: "task-1" }] });
+    storage.close();
+
+    const reopened = createBoardStorage({ dataDir: tempDir });
+    await expect(reopened.readBoard()).resolves.toMatchObject({ tasks: [{ id: "task-1" }] });
+    reopened.close();
+  });
+
+  it("exports the current board to a readable JSON file", async () => {
+    const storage = await makeStore();
+    const board = { tasks: [{ id: "task-1" }], stickers: [], links: [], branches: [], achievements: [], agentMemory: null, updatedAt: "2026-05-18T09:30:00.000Z" };
+    await storage.writeBoard(board);
+
+    await expect(storage.exportBoard()).resolves.toBe(path.join(tempDir, "stepview-board.json"));
+    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(board);
+  });
 });

@@ -237,12 +237,18 @@ CREATE INDEX idx_snapshots_recent ON snapshots(account_id, kind, created_at DESC
 ```sql
 CREATE TABLE board_documents (
   doc_key TEXT PRIMARY KEY,      -- 目前只有 'board'
-  revision INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
   payload_json TEXT NOT NULL,
+  backup_json TEXT,              -- 承接原 stepview-board.backup.json：主副本读不出来时回退
   hash TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 ```
+
+数据库层另外维护一份 `stepview-board.json`（主文件 + 备份文件）作为**导出镜像**：画布落库之后，
+用户在文件管理器里打开数据目录依然能直接看到自己的画布，`board:reveal` 也还是展示它。
+镜像的读写集中在 `electron/db/boardExport.js`，业务代码不再碰这些文件。等 Phase 7 的显式导出
+命令落地、并确认用户不再依赖这份文件之后，镜像连同 `tests/boardStorage.test.js` 里的文件断言一起移除。
 
 ### 日记（Phase 6）
 
@@ -334,17 +340,24 @@ CREATE INDEX idx_diary_links_target ON diary_links(account_id, target_type, targ
 
 **顺带发现（未修）**：`agentService` 里读的 `sqliteStore.accountId` 一直是 `undefined`，因为旧 `createAgentSqliteStore` 的返回值里根本没有这个字段。补上它会立刻触发记忆仓储的账号校验，可能让现有提取流程抛错，属于另一个独立问题，这里只记录不处理。
 
-### Phase 3：画布落库
+### Phase 3：画布落库 ✅
 
-- [ ] 迁移 `0006-board.sql` 建 `board_documents` 表。
-- [ ] 新建 `boardRepository.js`，读写画布文档 + 维护 `revision` 与 `hash`。
-- [ ] 改写 `electron/boardStorage.js` 为仓储的薄适配器，**对外接口完全不变**（`readBoard` / `writeBoard` / `flushWrites` / `setFsApi` / `boardPath` / `backupPath`），保证 `boardHash`、提案、审批、Agent 工具、22 个相关测试全部零改动。
-- [ ] 首次导入：账号库无画布记录时读取 `stepview-board.json` 并导入，**原文件保留不删**；此后以库为准。
-- [ ] 处理 `setFsApi`：现有测试靠它注入假文件系统。改为在仓储层保留一个可注入的驱动点，保持测试可用。
-- [ ] 处理外部依赖：`board:reveal` 与 `account:import-personal-data` 现在依赖用户可见的 JSON 文件，改为显式导出/导入命令，同时更新界面文案。
-- [ ] 测试：`tests/boardStorage.test.js` 全部通过且无需改断言；旧 JSON 导入幂等。
-- [ ] 验证：`npm test` + `npm run build`。
-- [ ] 提交：`refactor: store the board document in the database`
+- [x] 迁移 `0006-board.sql` 建 `board_documents` 表。
+- [x] 新建 `boardRepository.js`，读写画布文档 + 维护 `revision` 与 `hash`。
+- [x] 改写 `electron/boardStorage.js` 为仓储的薄适配器，**对外接口完全不变**（`readBoard` / `writeBoard` / `flushWrites` / `setFsApi` / `boardPath` / `backupPath`），保证 `boardHash`、提案、审批、Agent 工具、相关测试全部零改动。仓储由 `accountContext` 注入，画布与审批、记忆共用同一个账号库连接。
+- [x] 首次导入：账号库无画布记录时读取 `stepview-board.json` 并导入，**原文件保留不删**；此后以库为准。
+- [x] 处理 `setFsApi`：文件系统注入点保留在适配器上，镜像写入仍走它，测试照旧可用。
+- [x] 处理外部依赖：`board:reveal` 改成"先导出再打开"（`boardStorage.exportBoard()`），`account:import-personal-data` 改成走仓储导入：
+      - 源目录只读，画布优先读源账号库、回退旧 JSON；旧库文件由 `electron/db/transfer.js` 复制给迁移器。
+      - 目标账号已有数据时先做 `VACUUM INTO` 一致性备份，不再靠"复制文件再复制回来"。
+      - 界面文案同步更新（`Local database ✅`、`Export board 📂`）。
+- [x] `electron/boardStorage.js`、`electron/main.js`、`electron/gateway/localGateway.js` 的边界豁免全部删除，豁免名单只减不增。
+- [x] 测试：`tests/boardStorage.test.js` 原有断言一行未改（22 个相关测试全绿），另补 4 条：库为权威副本、导出文件丢了也能读、跨实例持久化、导出内容正确。
+- [x] 验证：`npm test`（248 通过）+ `npm run build`。
+- [x] 提交：`refactor: store the board document in the database`
+
+遗留说明：JSON 导出镜像与 `tests/boardStorage.test.js` 的文件断言是刻意保留的过渡态（用户仍然能直接看到自己的画布）。
+Phase 7 提供显式导出/备份命令之后，一起移除镜像并改写这几条断言。
 
 ### Phase 4：清理历史包袱
 

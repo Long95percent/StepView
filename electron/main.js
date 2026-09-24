@@ -1,5 +1,4 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
@@ -139,10 +138,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("account:switch", (_event, input) => gateway.switchAccount(input));
   ipcMain.handle("account:import-personal-data", (_event, input) => gateway.importPersonalData(input));
   ipcMain.handle("board:reveal", async () => {
+    // 画布已经落库，这里先把库里的画布导出成 JSON 再打开，用户看到的始终是当前数据。
     const context = gateway.getContext();
-    await fs.mkdir(path.dirname(context.boardStorage.boardPath()), { recursive: true });
-    await shell.showItemInFolder(context.boardStorage.boardPath());
-    return context.boardStorage.boardPath();
+    const exportedPath = await context.boardStorage.exportBoard();
+    await shell.showItemInFolder(exportedPath);
+    return exportedPath;
   });
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());

@@ -1,7 +1,6 @@
 import path from "node:path";
-import fs from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { buildAgentMemory } from "../../src/agentMemory.js";
+import { boardHasContent, readBoardSnapshot, stageLegacyDatabaseFiles } from "../db/transfer.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
 import { validateNetworkPolicy } from "./networkPolicy.js";
@@ -115,54 +114,41 @@ export function createLocalGateway({
     return activateAccount(result.account, result.sessionId);
   }
 
+  /**
+   * 把个人模式的数据导入当前家庭账号。
+   *
+   * 全程走仓储：画布从账号库/旧 JSON 读出来再写进目标账号，旧的独立数据库文件由
+   * 数据库层复制并交给迁移器导入。源目录只读，不删不改。
+   */
   async function importPersonalData({ confirm = false } = {}) {
     if (config.mode !== "family") throw new Error("Personal data import is unavailable in personal mode.");
     const activeContext = requireContext();
-    const targetDir = activeContext.dataDir;
+    const account = activeContext.account;
     const sourceDir = getDataDir();
-    const files = ["stepview-board.json", "stepview-board.backup.json", "stepview-agent.sqlite"];
-    const existing = [];
-    for (const file of files) {
-      try {
-        const filePath = path.join(targetDir, file);
-        await fs.access(filePath);
-        if (file !== "stepview-agent.sqlite") {
-          existing.push(file);
-        } else {
-          const targetDb = new DatabaseSync(filePath);
-          const count = targetDb.prepare(`SELECT (SELECT COUNT(*) FROM agent_sessions) + (SELECT COUNT(*) FROM agent_turns) AS count`).get().count;
-          targetDb.close();
-          if (count > 0) existing.push(file);
-        }
-      } catch {}
-    }
-    if (existing.length && !confirm) throw new Error("Target account already has data; explicit confirmation is required.");
-    const backupDir = path.join(targetDir, `.import-backup-${Date.now()}`);
+    const accountsDir = path.join(sourceDir, "accounts");
+
+    const sourceBoard = await readBoardSnapshot({ dataDir: sourceDir });
+    const targetBoard = await activeContext.boardStorage.readBoard();
+    const hasExistingData = boardHasContent(targetBoard) || activeContext.agentSqliteStore.listSessions().length > 0;
+    if (hasExistingData && !confirm) throw new Error("Target account already has data; explicit confirmation is required.");
+
+    // 要覆盖已有数据时先做一次一致性备份（VACUUM INTO），比"复制文件再复制回来"可靠。
+    const backupPath = hasExistingData
+      ? activeContext.database.backups.createBackup({ connection: activeContext.database, label: "before-personal-import" }).path
+      : null;
+
+    if (sourceBoard) await activeContext.boardStorage.writeBoard(sourceBoard);
+
+    // 先关掉目标账号的连接，再复制旧库文件，最后重建上下文触发迁移导入。
     await activeContext.close();
     try {
-      if (existing.length) {
-        await fs.mkdir(backupDir, { recursive: true });
-        for (const file of existing) await fs.copyFile(path.join(targetDir, file), path.join(backupDir, file));
-      }
-      for (const file of files) {
-        const sourcePath = path.join(sourceDir, file);
-        const targetPath = path.join(targetDir, file);
-        try {
-          await fs.access(sourcePath);
-          await fs.copyFile(sourcePath, targetPath);
-          if (file === "stepview-agent.sqlite") {
-            const importedDb = new DatabaseSync(targetPath);
-            importedDb.close();
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") throw error;
-        }
-      }
-      context = accountContextFactory({ account: activeContext.account, accountsDir: path.join(sourceDir, "accounts") });
-      return { ok: true, accountId: activeContext.accountId, backupDir: existing.length ? backupDir : null };
+      const staged = stageLegacyDatabaseFiles({ sourceDir, targetDir: activeContext.dataDir });
+      context = accountContextFactory({ account, accountsDir });
+      return { ok: true, accountId: account.accountId, backupPath, staged };
     } catch (error) {
-      for (const file of existing) await fs.copyFile(path.join(backupDir, file), path.join(targetDir, file));
-      context = accountContextFactory({ account: activeContext.account, accountsDir: path.join(sourceDir, "accounts") });
+      // 重建上下文保证账号还能打开；备份路径写进错误信息，方便人工恢复。
+      context = accountContextFactory({ account, accountsDir });
+      if (backupPath) error.message = `${error.message}（导入前的备份：${backupPath}）`;
       throw error;
     }
   }

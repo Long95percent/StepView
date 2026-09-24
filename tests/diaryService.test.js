@@ -131,6 +131,42 @@ describe("diary service", () => {
     expect(board).toEqual(nodeBoard());
   });
 
+  it("leaves the canvas note byte-for-byte identical after an import", () => {
+    const board = nodeBoard();
+    // 挑一条带各种空白和换行的备注，逐字节比对才能证明"没被 trim / 没被规范化"。
+    board.tasks[0].nodes[0].detail = "第一行  \n\t缩进过的第二行\n 尾部有空格   ";
+    const before = JSON.stringify(board);
+
+    expect(service.importNodeNotes(board, { confirm: true }).created).toBe(2);
+
+    // 整块画布字符串级一致：不只是"看起来一样"，连空白和换行都没动过。
+    expect(JSON.stringify(board)).toBe(before);
+    expect(board.tasks[0].nodes[0].detail).toBe("第一行  \n\t缩进过的第二行\n 尾部有空格   ");
+    // 日记那一份会走和手动新建完全一样的归一化（首尾空白 trim，行内原样）。
+    // 这只作用在副本上，源头一个字没动——画布备注还是上面那一整串。
+    const imported = service.list({ status: "all" }).find((entry) => entry.links.some((link) => link.targetId === "node-1"));
+    expect(imported.content).toBe("第一行  \n\t缩进过的第二行\n 尾部有空格");
+  });
+
+  it("scopes an import to the given nodes so one node's button cannot import the whole board", () => {
+    const board = nodeBoard();
+
+    expect(service.previewNodeNoteImport(board, { nodeIds: ["node-4"] }).map((item) => item.nodeId)).toEqual(["node-4"]);
+
+    // 节点面板上点的是 node-4 自己的导入按钮，就不该把 node-1 的备注也顺走。
+    const result = service.importNodeNotes(board, { confirm: true, nodeIds: ["node-4"] });
+    expect(result).toMatchObject({ confirmed: true, total: 1, created: 1, skipped: 0 });
+
+    const entries = service.list({ status: "all" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe("node");
+    expect(entries[0].links[0]).toMatchObject({ targetType: "node", targetId: "node-4" });
+    // node-1 仍然可以被单独导入：收窄范围只是这次不导它，不是把它标成导过了。
+    expect(service.previewNodeNoteImport(board, { nodeIds: ["node-1"] })[0].alreadyImported).toBe(false);
+    expect(service.importNodeNotes(board, { confirm: true, nodeIds: ["node-1"] }).created).toBe(1);
+    expect(service.list({ status: "all" })).toHaveLength(2);
+  });
+
   it("does not import the same node twice, even after the imported entry is deleted", () => {
     const board = nodeBoard();
     const first = service.importNodeNotes(board, { confirm: true });

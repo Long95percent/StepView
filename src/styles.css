@@ -1761,6 +1761,40 @@ button.diaryNodeTag:hover { color: #e6f6ff; background: rgba(0, 170, 255, .22); 
   background: rgba(109, 92, 255, .1);
 }
 .nodeDiaryAdd:hover { color: #fff; background: rgba(109, 92, 255, .2); }
+.nodeDiaryImport {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px dashed rgba(255, 219, 92, .34);
+  border-radius: 11px;
+  color: #ffe8a8;
+  font-size: 11px;
+  font-weight: 750;
+  background: rgba(255, 219, 92, .09);
+}
+.nodeDiaryImport:hover { color: #fff; background: rgba(255, 219, 92, .18); }
+/* Read-only history of canvas note text. Collapsed by default: the canvas card
+   already shows the note, this is only here so the original stays findable after import. */
+.nodeDiarySource { margin-top: 6px; }
+.nodeDiarySource summary {
+  color: #9fb2d2;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.nodeDiarySource pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 11px;
+  color: #b9c7de;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, .04);
+  max-height: 180px;
+  overflow-y: auto;
+}
 .nodeDiaryDays { display: flex; flex-wrap: wrap; gap: 5px; }
 .nodeDiaryDay {
   position: relative;
@@ -1846,3 +1880,29 @@ button.diaryNodeTag:hover { color: #e6f6ff; background: rgba(0, 170, 255, .22); 
   background: rgba(0, 170, 255, .14);
 }
 .diaryFocusDay:hover { color: #e6f6ff; background: rgba(0, 170, 255, .24); }
+
+/* --- Node note import: preview modal (Phase 5) --------------------------- */
+/* These panels render through a portal onto document.body: the node card sits inside a
+   transformed canvas world, and transform / backdrop-filter would make it the containing
+   block for position: fixed descendants, squeezing a full-screen backdrop down to the
+   node card. Nothing here may reintroduce transform or backdrop-filter either. */
+
+.diaryImportModal { width: min(560px, calc(100vw - 48px)); }
+.diaryImportModal h2 { margin: 0 0 8px; }
+.diaryImportModal > p { margin: 0 0 10px; color: #b9c7de; font-size: 13px; line-height: 1.6; }
+.diaryImportFacts { margin: 0 0 12px; padding-left: 18px; color: #9fb2d2; font-size: 12px; line-height: 1.7; }
+.diaryImportFacts b { color: #dbe8ff; }
+.diaryImportPreview {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  color: #c6d4ea;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, .045);
+  max-height: 280px;
+  overflow-y: auto;
+}

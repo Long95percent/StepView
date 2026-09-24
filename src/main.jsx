@@ -1082,6 +1082,7 @@ function App() {
                       api={diaryApi}
                       nodeId={node.id}
                       nodeLabel={task.title ? `${task.title} · ${node.title}` : node.title}
+                      nodeDetail={node.detail ?? ""}
                       nodeOptions={diaryNodeOptions}
                       revision={diaryRevision}
                       onToast={showToast}

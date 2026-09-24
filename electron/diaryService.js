@@ -271,17 +271,23 @@ export function createDiaryService({ repository, accountId, now = () => new Date
    * 预览"把节点备注导成日记"。
    *
    * 只读画布、不写任何东西。已经导入过的节点标记出来，让用户知道哪些会被跳过。
+   *
+   * `nodeIds` 用来把范围收窄到指定节点：节点面板上的导入入口只该导入那一个节点，
+   * 不能顺手把画布上其他节点的备注也一起导了——用户点的是这个节点上的按钮。
    */
-  function previewNodeNoteImport(board) {
+  function previewNodeNoteImport(board, { nodeIds = null } = {}) {
     const imported = new Set(repository.listImportedNodeIds());
-    return collectNodeNotes(board).map((note) => ({
-      nodeId: note.nodeId,
-      taskId: note.taskId,
-      title: (note.nodeTitle || note.taskTitle).slice(0, DIARY_TITLE_MAX_LENGTH),
-      content: note.content,
-      occurredAt: note.timestamp,
-      alreadyImported: imported.has(note.nodeId),
-    }));
+    const scope = nodeIds ? new Set(nodeIds.map((id) => String(id))) : null;
+    return collectNodeNotes(board)
+      .filter((note) => !scope || scope.has(note.nodeId))
+      .map((note) => ({
+        nodeId: note.nodeId,
+        taskId: note.taskId,
+        title: (note.nodeTitle || note.taskTitle).slice(0, DIARY_TITLE_MAX_LENGTH),
+        content: note.content,
+        occurredAt: note.timestamp,
+        alreadyImported: imported.has(note.nodeId),
+      }));
   }
 
   /**
@@ -292,8 +298,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
    *   2. 只读画布、只往日记里写，**节点原文一个字都不动**。
    *   3. 幂等：一个节点只导一次。条目后来被改、被归档、被删掉，都不会再导一遍。
    */
-  function importNodeNotes(board, { confirm = false, timezone = "UTC" } = {}) {
-    const preview = previewNodeNoteImport(board);
+  function importNodeNotes(board, { confirm = false, timezone = "UTC", nodeIds = null } = {}) {
+    const preview = previewNodeNoteImport(board, { nodeIds });
     const pending = preview.filter((item) => !item.alreadyImported);
     const skipped = preview.length - pending.length;
     if (!confirm) return { confirmed: false, total: preview.length, created: 0, skipped, pending: pending.length, items: pending };

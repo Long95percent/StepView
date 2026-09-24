@@ -1,8 +1,9 @@
 # StepView 日记系统重构实施计划（每日日记 / 节点日记）
 
-> 状态：仅实施计划，当前不直接实现功能。
+> 状态：**实施中**。Phase 1-4 已完成并各自独立提交；Phase 5（节点原生日记非破坏导入）与 Phase 6（Agent 接入与文档）未开工。
 > 前置阅读：`docs/superpowers/plans/2026-09-24-database-layer-refactor.md`
-> 数据库地基（Phase 0-5）与日记数据层/服务层（Phase 6）已完成。**日记界面是 Phase 6 明确留下的遗留项，目前一行都没有。**
+> 数据库地基（Phase 0-5）与日记数据层/服务层（Phase 6）已完成。
+> 日记界面已经落地：`src/diary/` 下有日记板块、编辑器、节点原生日记区、当日弹层；进度看第七节的各阶段勾选。
 
 ## 零、已确认的决策与注意点
 
@@ -82,9 +83,9 @@
 
 ## 四、前端现状（为什么你完全看不到日记）
 
-> 本节记录的是 **Phase 3 开工前**的状态。Phase 3 完成后，`src/diary/` 下已有四个文件、
-> `main.jsx` 有了视图切换入口，家庭模式的客户端也补上了 `diary` 命名空间；
-> 当前进度看第七节的各阶段勾选。
+> 本节记录的是 **Phase 3 开工前**的状态，保留下来是为了说明"当初为什么一行都没有"。
+> 这几条现在都已经被 Phase 2 / 3 解决（`diary` 命名空间已补上、`src/diary/` 已立目录边界、
+> `main.jsx` 已有视图切换入口），当前进度看第七节的各阶段勾选。
 
 不是藏起来了，是**真的没写**。
 
@@ -427,15 +428,52 @@ diary: { list, get, create, update, trash, restore, remove,
 - 顺带清掉了库里 13 行孤儿 `diary_revisions`（都是本阶段之前冒烟测试的 `purge` 残留，
   因为上面那条"不删修订历史"的缺陷而留在库里），清理后 0 行。
 
-### Phase 4：节点侧界面 + 当日弹层（落实 N1、N2、N3、N4）
+### Phase 4：节点侧界面 + 当日弹层（落实 N1、N2、N3、N4）✅ 已完成
 
-- [ ] 新建 `src/diary/nodeDiarySection.jsx`：接进节点展开区，上半原生日记、下半日期按钮排。
-- [ ] 新建 `src/diary/dayDiaryPopover.jsx`：**渲染在 shell 层、用屏幕坐标**，**不切换视图**（**N2**）。
-- [ ] 改 `isCanvasPanTarget`（`src/main.jsx:126`）白名单，加 `.diaryPopover` / `.diaryBackdrop`（**N1**）。
-- [ ] 改键盘监听，放行弹层内的按键（**N3**）。"输入框内放行"那一半已在 Phase 3 顺手做掉。
-- [ ] 排好 z-index 层级（画布 < sidebar < 日记弹层 < 设置弹窗）（**N4**）。
-- [ ] 验收：手动清单 3-7、9 通过（桌面模式 + 家庭模式各一遍）。
-- [ ] 验证：`npm run build` 通过、`npm test` 全绿。
+- [x] 新建 `src/diary/nodeDiarySection.jsx`：接进节点展开区，上半原生日记、下半日期按钮排。
+      整个块在 `onPointerDown` / `onClick` 上都 `stopPropagation`——不拦的话点日记会被画布当成
+      拖拽 / 收起节点面板的手势，日记根本点不开。
+- [x] 新建 `src/diary/dayDiaryPopover.jsx`：**渲染在 shell 层、用屏幕坐标**，**不切换视图**（**N2**）。
+      弹层内部直接嵌 `DiaryEditor`，所以"在节点里写当天日记"不用先跳去日记板块；
+      从节点进来时预挂该节点（`DiaryEditor` 新增 `defaultNodeIds`）。
+- [x] 改 `isCanvasPanTarget`（`src/main.jsx`）白名单，加 `.diaryPopover` / `.diaryBackdrop`（**N1**）。
+- [x] 改键盘监听（**N3**）：放行输入框；画布不在前台或弹层开着时不响应 `Delete` / `Backspace`；
+      `Esc` 先关弹层、不落到画布上。"输入框内放行"那一半已在 Phase 3 顺手做掉。
+- [x] 排好 z-index 层级：`.diaryBackdrop` / `.diaryPopover` = 8，**在 sidebar（4）之上、`.modalBackdrop`（10）之下**（**N4**）。
+      弹层里还要再嵌 `position: fixed` 的编辑器弹窗，所以 `.diaryPopover` 只用 `top` / `bottom` 定位、
+      **不给 `transform` / `backdrop-filter`**：这两个属性会给固定定位后代造包含块，
+      实测加上之后编辑器只占弹层那么大一块（`placePopover` 因此是纯函数，能单测）。
+- [x] 验收：手动清单 3-7 通过（家庭模式）。第 9 条的桌面模式那一半没能自动化，原因见下。
+- [x] 验证：`npm run build` 通过、`npm test` 全绿。
+
+**顺手补上的三个真缺陷（都不是本阶段新引入的）**
+
+- **节点删掉之后，日记上的关联永远不会被标成孤儿**。Phase 1 立了 `markLinksOrphaned` 和
+  `diary_links.orphaned_at`，但**从来没有任何地方调用过它**，所以清单第 7 条实际上过不了。
+  现在 `boardStorage` 保存时对比节点集合，把消失的节点通过 `onNodesRemoved` 回调报上来，
+  覆盖删节点 / 删任务 / 清空看板 / Agent 审批四条路径；回调抛错只记日志，不影响画布保存本身。
+- **`listTags` 有三处错**：没带 `accountId` 过滤（跨账号串数据，平时看不出来）；计数数的是 `et.diary_id`
+  而不是 `e.id`（回收站里的日记也被算进角标）；没过滤掉计数为 0 的标签。三处分别修掉，各补一条测试。
+- **版本冲突后"重新载入"是个空转**：表单的初始值只在挂载时算一次，`setEditor` 交回新 entry 之后
+  React 复用了同一个 `DiaryEditor` 实例，输入框里还是旧内容，用户接着一保存就把刚拉回来的新版又盖掉了——
+  正是这一版要防的事。给 `key` 带上 `diaryId:rev` 强制重挂载才真的换内容。
+  这条专门做了对照实验：去掉 `key` 后验收脚本断言失败（表单仍是本地改过的内容），加回来才通过。
+
+**验证**
+
+- 55 个测试文件 337 个用例全绿（本阶段从 331 涨到 337），`npm run build` 通过。
+- **无头 Chrome 驱动真实界面**（家庭模式 + 真实账号库）跑完清单 3、4、5、6、7，全程页面零报错：
+  节点里写节点日记 → 出现在该节点"原生日记"；取消全部关联被拦下且编辑器不关、数据不动；
+  点节点日期按钮 → 弹层出现、**视图没变、画布没动**；一条每日日记挂两个节点 → 两个节点的日期排里都有；
+  删掉被关联的节点 → 日记还在、标注 `📍 原节点已删除`、且不再是可点的按钮（不再把 `node-xxx` 摆给用户看）。
+  另有一个冲突脚本从"另一台设备"（HTTP 直连）改同一条日记制造 409，验证"重新载入"真的换内容、不静默覆盖。
+- 测试数据全部清干净：账号库 `diary_entries` / `diary_links` / `diary_revisions` / `diary_tags` / `diary_entry_tags` 全 0；
+  看板回到 1 个任务 / 6 个节点。
+  清理时踩到的坑记一笔：日记列表默认筛选是"每日"，**节点日记必须先把类型切到"全部"才看得见**，
+  只看列表会以为已经清干净了。
+- **清单第 9 条的桌面模式那一半没跑成**：本仓库 `Dockerfile` 设了 `ELECTRON_SKIP_BINARY_DOWNLOAD=1`，
+  容器里只有 gateway + nginx；本机也没有 Electron 二进制（用户明确不许下载依赖），
+  所以桌面模式只能人工过一遍。家庭模式那一半已由无头 Chrome 覆盖。
 
 ### Phase 5：节点原生日记接入日记系统（非破坏）（落实 D6）
 

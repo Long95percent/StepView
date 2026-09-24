@@ -315,6 +315,62 @@ describe("family HTTP gateway", () => {
     ]);
   });
 
+  it("carries kind and nodeIds through an agent node-diary proposal all the way to the node's native list", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-node-diary-"));
+    let proposal = null;
+    let firstNodeId = null;
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+      openAiComplete: async ({ runTool }) => {
+        // kind / nodeIds 是 Agent 传进来的，中间隔着一层 schema 校验，很容易被静默丢掉。
+        proposal = await runTool("diary.propose_entry", {
+          kind: "node",
+          title: "Agent 写的节点日记",
+          content: "这条是从 Agent 提过来的",
+          nodeIds: [firstNodeId],
+          reason: "节点上值得留一笔",
+        });
+        return { text: "已经准备好一条节点日记。", model: "test-model" };
+      },
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    const registration = await fetch(`${baseUrl}/accounts/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "heidi", password: "password-1" }) }).then((response) => response.json());
+    const headers = { Authorization: `Bearer ${registration.sessionId}`, "Content-Type": "application/json" };
+
+    const task = buildTask("节点日记任务", { x: 300, y: 300 });
+    firstNodeId = task.nodes[0].id;
+    await fetch(`${baseUrl}/board`, { method: "PUT", headers, body: JSON.stringify({ tasks: [task] }) });
+
+    const chat = await fetch(`${baseUrl}/agent/chat`, { method: "POST", headers, body: JSON.stringify({ sessionId: `task:${task.id}`, userText: "帮我记一笔", apiKey: "test-key" }) });
+    expect(chat.status, await chat.text()).toBe(200);
+    // 提案摘要不该把 daily / node 这种内部词摆给用户看。
+    expect(proposal).toMatchObject({ type: "diary_change", operation: "diary.create", summary: "新增节点日记「Agent 写的节点日记」" });
+    expect(proposal.entry).toMatchObject({ kind: "node" });
+
+    const pending = await fetch(`${baseUrl}/agent/approvals`, { headers }).then((response) => response.json());
+    await fetch(`${baseUrl}/agent/approvals/decide`, { method: "POST", headers, body: JSON.stringify({ approvalId: pending[0].approvalId, decision: "approved" }) });
+
+    // 批准之后它得真的落在该节点的原生日记里，而不是变成一条每日日记。
+    const nodeEntries = await fetch(`${baseUrl}/diary?kind=node&targetType=node&targetId=${encodeURIComponent(firstNodeId)}`, { headers }).then((response) => response.json());
+    expect(nodeEntries).toEqual([expect.objectContaining({ title: "Agent 写的节点日记", kind: "node", source: "agent" })]);
+
+    const timeline = await fetch(`${baseUrl}/diary/timeline`, { headers }).then((response) => response.json());
+    expect(timeline).toEqual([expect.objectContaining({ title: "Agent 写的节点日记", kind: "node" })]);
+  });
+
   it("accepts the browser preflight for DELETE so entries can be trashed and purged", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-delete-"));
     gateway = createFamilyHttpServer({

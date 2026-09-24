@@ -15,7 +15,9 @@ export const diaryTools = [
   defineTool({
     id: "diary.recent",
     title: "Read recent diary entries",
-    description: "Read a short timeline of the user's recent diary entries: day, title, summary and tags.",
+    description:
+      "Read a short timeline of the user's recent diary entries: day, title, summary, tags and kind. "
+      + "kind is \"daily\" for the day-based entries the user reads in the diary board, and \"node\" for the ones attached to a canvas node.",
     category: "diary",
     risk: "read",
     scopes: ["diary:read"],
@@ -34,7 +36,8 @@ export const diaryTools = [
     id: "diary.propose_entry",
     title: "Propose a diary entry",
     description:
-      "Propose a new diary entry, or an edit to an existing one. This does NOT write anything: the entry is staged for the user to review and confirm, then applied on approval. Give at least a title or content.",
+      "Propose a new diary entry, or an edit to an existing one. This does NOT write anything: the entry is staged for the user to review and confirm, then applied on approval. Give at least a title or content. "
+      + "Set kind to \"node\" only for an entry about a specific canvas node, and always pass that node's id in nodeIds, otherwise the proposal is rejected.",
     category: "diary",
     risk: "propose",
     scopes: ["diary:propose"],
@@ -44,6 +47,13 @@ export const diaryTools = [
       properties: {
         operation: { type: "string", enum: ["create", "update"], description: "Create a new entry (default) or edit an existing one." },
         diaryId: { type: "string", maxLength: 120, description: "Required when operation is \"update\"." },
+        kind: {
+          type: "string",
+          enum: ["daily", "node"],
+          description:
+            "\"daily\" (default) is a day-based entry that shows up in the diary board under its date. "
+            + "\"node\" is an entry attached to a canvas node and shows up in that node's native diary list; it requires at least one node in nodeIds.",
+        },
         title: { type: "string", maxLength: 120 },
         content: { type: "string", minLength: 1, maxLength: 20000 },
         occurredAt: { type: "string", maxLength: 40 },

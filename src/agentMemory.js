@@ -153,6 +153,17 @@ function summarizeBranch(board, task, branch) {
   };
 }
 
+/**
+ * 从画布派生的"日记信号"。
+ *
+ * 名字里的 diary 是历史包袱，口径要说清楚：**它读的是 `node.detail`，也就是画布上的节点备注，
+ * 不是 `diary_entries` 里的日记条目**。所以 `diaryEntryId` 装的其实是 node id，
+ * 日记的 `kind`（每日 / 节点）在这条链路上不适用——这里没有任何一条日记条目可以被标类型。
+ *
+ * 真正的日记条目走 `diaryService`，只经 `diary.recent` / `diary.propose_entry` 两个工具进 Agent，
+ * 那条路上的 kind 由提案摘要负责说清（见 electron/diaryService.js 的 planChange）。
+ * 想改这里的字段名之前先确认 `electron/main.js`、`electron/agentPromptBuilder.js` 和记忆相关测试都跟着改。
+ */
 function buildDiarySignals(board) {
   return (board.tasks || [])
     .flatMap((task) => (task.nodes || []).map((node) => ({ task, node })))

@@ -90,9 +90,20 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     return entry.title || summarizeDiaryEntry(entry, { length: 20 }) || "（空）";
   }
 
+  /**
+   * 给审批队列里的人话类型名。
+   *
+   * 提案的摘要和 diff 是直接摆在用户眼前让他点"批准/拒绝"的，写 `node` / `daily`
+   * 等于让用户去猜；这两个词本来就是内部概念，只该出现在库里，不该出现在确认框里。
+   */
+  const KIND_LABELS = { daily: "每日日记", node: "节点日记" };
+  function kindLabel(kind) {
+    return KIND_LABELS[kind] || "日记";
+  }
+
   function changeLines(current, next) {
     const lines = [];
-    if (current.kind !== next.kind) lines.push(`类型：${current.kind} → ${next.kind}`);
+    if (current.kind !== next.kind) lines.push(`类型：${kindLabel(current.kind)} → ${kindLabel(next.kind)}`);
     if (current.title !== next.title) lines.push(`标题「${current.title || "（空）"}」→「${next.title || "（空）"}」`);
     if (current.content !== next.content) {
       lines.push(`正文：${summarizeDiaryEntry(current, { length: 40 }) || "（空）"} → ${summarizeDiaryEntry(next, { length: 40 }) || "（空）"}`);
@@ -116,13 +127,14 @@ export function createDiaryService({ repository, accountId, now = () => new Date
 
     if (op === "create") {
       const entry = normalize({ ...input, source: input.source ?? "agent" });
+      const label = kindLabel(entry.kind);
       return {
         type: "diary_change",
         operation: "diary.create",
-        summary: `新增日记「${entryLabel(entry)}」`,
+        summary: `新增${label}「${entryLabel(entry)}」`,
         reason,
         entry,
-        diff: { lines: [`新增日记「${entryLabel(entry)}」`, `日期：${entry.occurredDay}`] },
+        diff: { lines: [`类型：${label}`, `日期：${entry.occurredDay}`] },
       };
     }
 
@@ -135,7 +147,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
         operation: "diary.update",
         diaryId: current.diaryId,
         rev: current.rev,
-        summary: `修改日记「${entryLabel(current)}」`,
+        // 用改完之后的 kind：Agent 把一条每日日记改成节点日记时，摘要该说的是"改成了节点日记"。
+        summary: `修改${kindLabel(merged.kind)}「${entryLabel(current)}」`,
         reason,
         entry: merged,
         diff: { lines },

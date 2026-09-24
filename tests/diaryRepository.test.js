@@ -320,6 +320,8 @@ describe("diary repository", () => {
 
     expect(diary.timeline({ kind: "node" }).map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
     expect(diary.timeline().map((item) => item.diaryId)).toEqual([daily.diaryId, nodeDiary.diaryId]);
+    // 时间线默认两种都返回，所以每条都得带 kind：不带的话 Agent 和界面分不出哪条是节点日记。
+    expect(diary.timeline().map((item) => item.kind)).toEqual(["daily", "node"]);
   });
 
   it("never leaves a node diary without a node link, across the whole database", () => {

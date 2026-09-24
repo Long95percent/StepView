@@ -61,8 +61,50 @@ describe("diary approvals", () => {
 
     const pending = await approvalService.list("account-a");
     expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({ type: "diary_change", status: "pending", operation: "diary.create", reason: "这条记录之后要回看", summary: "新增日记「和 Agent 的对话」" });
-    expect(pending[0].diff.lines.length).toBeGreaterThan(0);
+    expect(pending[0]).toMatchObject({ type: "diary_change", status: "pending", operation: "diary.create", reason: "这条记录之后要回看", summary: "新增每日日记「和 Agent 的对话」" });
+    // 摘要和 diff 是摆在用户眼皮底下让他点"批准"的，这里不能出现 node / daily 这种内部词。
+    expect(pending[0].diff.lines[0]).toBe("类型：每日日记");
+    expect(pending[0].diff.lines.join(" ")).not.toContain("daily");
+  });
+
+  it("carries the kind through a proposal so the review dialog says which diary it is", async () => {
+    const { result } = await toolRuntime.run(
+      "diary.propose_entry",
+      { kind: "node", title: "节点原生日记", content: "这条挂在 Start 上", nodeIds: ["node-1"], reason: "节点上的一条记录" },
+      toolContext(),
+    );
+
+    expect(result.entry).toMatchObject({ kind: "node", source: "agent" });
+    expect(result.entry.links).toContainEqual(expect.objectContaining({ targetType: "node", targetId: "node-1" }));
+    expect(result.summary).toBe("新增节点日记「节点原生日记」");
+    expect(result.diff.lines[0]).toBe("类型：节点日记");
+    expect(diaryService.list({ status: "all" })).toHaveLength(0);
+
+    // 类型要一路活到落库那一刻，不能提案说的是节点日记、批准之后变成每日日记。
+    const decided = await approvalService.decide(result.approvalId, "account-a", "approved");
+    expect(decided.appliedDiary).toMatchObject({ kind: "node", title: "节点原生日记" });
+    expect(diaryService.listNodeEntries("node-1").map((entry) => entry.title)).toEqual(["节点原生日记"]);
+  });
+
+  it("refuses a node proposal that names no node", async () => {
+    // kind='node' 的硬不变量在共用纯函数里，Agent 也绕不过去。
+    await expect(
+      toolRuntime.run("diary.propose_entry", { kind: "node", content: "谁都不挂的节点日记" }, toolContext()),
+    ).rejects.toThrowError(/节点日记必须关联至少一个节点/);
+    expect(diaryService.list({ status: "all" })).toHaveLength(0);
+    expect(await approvalService.list("account-a")).toEqual([]);
+  });
+
+  it("says node diary when an edit turns a daily entry into one", async () => {
+    const existing = diaryService.create({ title: "本来是每日的", content: "先写在日记板块" });
+    const { result } = await toolRuntime.run(
+      "diary.propose_entry",
+      { operation: "update", diaryId: existing.diaryId, kind: "node", nodeIds: ["node-1"] },
+      toolContext(),
+    );
+
+    expect(result.summary).toBe("修改节点日记「本来是每日的」");
+    expect(result.diff.lines).toContain("类型：每日日记 → 节点日记");
   });
 
   it("writes the entry only after the user approves it", async () => {
@@ -129,5 +171,13 @@ describe("diary approvals", () => {
     await expect(toolRuntime.run("diary.propose_entry", { content: "没有服务层" }, { accountId: "account-a" })).rejects.toThrowError(
       /missing required context/,
     );
+  });
+
+  it("rejects fields the tool schema does not declare", async () => {
+    // 工具的 inputSchema 是 additionalProperties: false，没声明的字段直接进不来。
+    // 这条是上面 kind 那条的把关人：如果 schema 其实不校验，kind 的测试就是空过的。
+    await expect(
+      toolRuntime.run("diary.propose_entry", { content: "带个野字段", notAField: 1 }, toolContext()),
+    ).rejects.toThrowError(/notAField/);
   });
 });

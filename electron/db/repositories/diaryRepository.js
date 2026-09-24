@@ -455,6 +455,9 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   function timeline({ limit = 50, from = null, to = null, kind = null } = {}) {
     return list({ limit, from, to, kind }).map((entry) => ({
       diaryId: entry.diaryId,
+      // 时间线默认两种类型都返回（node 日记也在这条线上），所以一定要带上 kind：
+      // 不带的话 Agent 和界面都分不出哪条是节点日记，只能靠标题猜。
+      kind: entry.kind,
       occurredDay: entry.occurredDay,
       title: entry.title,
       summary: summarizeDiaryEntry(entry),

@@ -441,11 +441,19 @@ Phase 3、4、5 一共删掉了 8 条。
   于是"更新一条已经带关联的日记"会撞 `UNIQUE (diary_id, target_type, target_id)`。这个 bug 是服务层测试（更新时会带上现有 `links`）才暴露出来的，
   仓储层原有的测试没有覆盖"更新时重复写同一条关联"，已在 `tests/diaryRepository.test.js` 补上回归用例。
 
+**复查修复（提交 `fb9beca`）**
+
+- [x] 关联改为 upsert：编辑一条日记时不再把关联的 `orphaned_at` 抹掉（服务层每次更新都会把现有 links 交回来，删了重建等于顺手复活已删节点）。
+- [x] `search` 补齐 `from` / `to` / `targetType` / `targetId`：以前只有 `list` 认这些参数，传了没报错、但也不生效。
+- [x] 版本冲突带 `statusCode = 409`：HTTP 上曾经报成 500（服务端错误），语义上它是"和当前状态冲突"。
+- [x] 已决策的提案移出待确认队列：`approvalService.list` 以前把已批准/已拒绝的记录一起返回，面板上会一直挂着一张带"保留/丢弃"按钮的卡片。
+- [x] 没有 id 的节点不参与备注导入（避免关联到一个字符串 `"undefined"`）。
+
 **遗留**
 
 - 日记的界面不在这一阶段：Phase 6 只做数据层、服务层与接口。
 
-- 验证：51 个测试文件 287 个用例全绿（本阶段从 269 涨到 287），`npm run build` 通过。
+- 验证：52 个测试文件 305 个用例全绿（本阶段从 269 涨到 305），`npm run build` 通过。
 
 ### Phase 7：备份与文档（进行中）
 
@@ -456,6 +464,13 @@ Phase 3、4、5 一共删掉了 8 条。
       问题一次报全而不是碰到第一个就停。替换时当前库改名成 `*.pre-restore-<时间>` 保留，旧库的 `-wal` / `-shm` 一并清掉。
 - [x] 桌面端通道：`data:export-archive` / `data:inspect-archive` / `data:restore-archive`。恢复前先关掉网关再动文件，完成后自动重启。
 - [x] 测试：`tests/dbArchive.test.js`（导出内容与行数、校验的各类失败、恢复保留旧库并清理 WAL、校验不过时不动数据、连接未关闭时拒绝恢复）。
+
+**复查修复（提交 `d616630`）**
+
+- [x] 老备份不再被判成"不完整"：必需表只要求能认出这是 StepView 的库的那几张，后来才加的表不算必需（三个月前的备份打开时补跑迁移就能用）。
+- [x] 校验改成真只读：以前 `openReadOnly` 只是"不跑迁移"，仍以读写方式打开并设置 `journal_mode=WAL`，在只读挂载上会失败，也可能动到用户的备份。现在有 `readOnly` 选项，测试断言校验前后备份文件字节不变。
+- [x] `expectedSchemaVersion` 的部分覆盖不再吃掉其余检查；支持的版本与必需表只在 `archive.js` 定义一份。
+- [x] 恢复失败时把网关重新打开，不把用户留在一个开不了画布的应用里。
 
 **文档**
 
@@ -468,6 +483,8 @@ Phase 3、4、5 一共删掉了 8 条。
 
 - [ ] 画布写入的乐观并发校验（Phase 5 挪过来的第三条）：保存时带上读到的 `revision`，对不上就拒绝并让前端提示冲突。
       `board_documents.revision` 已经在每次保存时自增，缺的是把 revision 传到前端、以及写入时的比对与冲突提示。
+- [ ] 日记界面开工前要先处理一件事：Electron 的 IPC 只把 `message` 传给渲染层，`error.code` / `error.statusCode` 会被丢掉。
+      后端已经能区分冲突（409）和输入错误（400），但前端现在只能靠中文文案猜。做界面时让 IPC 回结构化错误（至少带上 `code`）。
 - [ ] 移除 `electron/db/boardExport.js` 的 JSON 镜像，并改写 `tests/boardStorage.test.js` 里那几条刻意冻结的文件断言。
 
 ## 迁移规则

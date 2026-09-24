@@ -359,15 +359,29 @@ CREATE INDEX idx_diary_links_target ON diary_links(account_id, target_type, targ
 遗留说明：JSON 导出镜像与 `tests/boardStorage.test.js` 的文件断言是刻意保留的过渡态（用户仍然能直接看到自己的画布）。
 Phase 7 提供显式导出/备份命令之后，一起移除镜像并改写这几条断言。
 
-### Phase 4：清理历史包袱
+### Phase 4：清理历史包袱 ✅
 
-- [ ] 删除 `electron/agentJournalStorage.js` 及其测试（已被 `agentSqliteStore` 取代的死代码）。
-- [ ] 清理 `knowledge-bases/` 的手写 JSON 目录，迁入 `knowledge_base` 表 + `blobs` 存储。
-- [ ] 接入保留策略：启动时与每日各执行一次 `runRetention()`，覆盖会话表、Agent 信号与审计事件、Agent 轮次。
-- [ ] 为所有被清理的表补上执行前统计，写入 `retention_runs`。
-- [ ] 测试：`retention.test.js` 覆盖每条规则，以及"重跑不误删"。
-- [ ] 验证：`npm test`。
-- [ ] 提交：`refactor: centralize data retention and remove legacy stores`
+- [x] 删除 `electron/agentJournalStorage.js` 及其测试（已被 `agentSqliteStore` 取代的死代码）。
+- [x] 清理 `knowledge-bases/` 的手写 JSON 目录：迁入 `knowledge_bases` 表 + `knowledgeBaseRepository`，列表不再扫目录。
+      只建了清单表，没建 `blobs`：知识库目前只有清单、没有任何正文写入方，先建一张没人用的表只会变成新的历史包袱。
+- [x] 全局库（账号、登录会话、网关设置）搬进数据库层：独立的迁移集合 `GLOBAL_MIGRATIONS` + `accountRepository`，
+      `accountStore` 变成薄适配器，老 `gateway.sqlite` 原地升级、数据不迁文件。→ 独立提交 `cc6931c`
+- [x] 接入保留策略：`db/maintenance.js` 提供"启动时执行一次 + 之后每 24 小时一次"的调度，账号库与全局库各一个实例。
+      - 账号库覆盖：Agent 信号、提示词快照、Mem0 同步日志、没写完的轮次、清理记录自身、审批与快照（Phase 1 起）。
+      - 全局库覆盖：过期登录会话。
+      - **已完成的对话轮次不设 TTL**：那是用户自己的聊天历史，只有 `status = 'pending'` 的半截轮次会被清掉。
+- [x] 每条规则执行前记录 `rowsBefore`，连同删除条数一起写进 `retention_runs`，可回答"这张表原来多少行、这次删了多少"。
+- [x] 测试：`retention.test.js` 覆盖每条规则、边界值（刚好到期的会话不删）、重跑不误删、执行前统计；
+      新增 `dbMaintenance.test.js` 覆盖启动即清理、每日定时、重复 start 不叠加、清理失败不拖垮应用。
+- [x] 验证：`npm test`（250 通过）+ `npm run build`。
+- [x] 提交：`refactor: centralize data retention and remove legacy stores`
+
+**遗留（本次刻意不做）**：软删除的记忆（`memory_items.status = 'deleted'`）还没有物理清理。
+它牵连 `memory_evidence` / `memory_embeddings` / `memory_relations` 三张子表，删错就是永久丢用户数据，
+值得单独评审一次，不塞进这次重构里顺手做。
+
+**边界豁免名单现状**：只剩两条永久豁免（`preflight.js` 环境探测、`redisManager.js` 拉起本机 Redis）
+和一条 Phase 5 待办（`src/main.jsx` 的明文密码）。Phase 3 与 Phase 4 一共删掉了 7 条。
 
 ### Phase 5：前端存储收口与安全修复
 

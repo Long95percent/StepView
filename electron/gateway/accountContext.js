@@ -18,6 +18,7 @@ import { createBoardChangeStore } from "../agent/boardChangeStore.js";
 import { createBoardChangeExecutor } from "../agent/boardChangeExecutor.js";
 import { createApprovalService } from "../agent/approvalService.js";
 import { openAccountDatabase } from "../db/index.js";
+import { createDatabaseMaintenance } from "../db/maintenance.js";
 import { createApprovalRepository } from "../db/repositories/approvalRepository.js";
 
 export function createAccountContext({
@@ -36,6 +37,9 @@ export function createAccountContext({
   const dataDir = explicitDataDir ? path.resolve(explicitDataDir) : path.join(accountsDir, account.accountId);
   const database = databaseFactory({ dataDir });
   const approvalRepository = createApprovalRepository({ connection: database });
+  // 账号库的过期清理：启动时跑一次，之后每天一次（规则见 db/retention.js）。
+  const maintenance = createDatabaseMaintenance({ connection: database });
+  maintenance.start();
   // 画布和审批、记忆共用同一个账号库连接，避免同一进程里对同一个文件开两个写入连接。
   const boardStorage = boardStorageFactory({ dataDir, repository: createBoardRepository({ connection: database }) });
   const agentSqliteStore = agentSessionRepositoryFactory({ connection: database });
@@ -76,10 +80,12 @@ export function createAccountContext({
     boardChangeStore,
     boardChangeExecutor,
     approvalService,
+    maintenance,
     redisCache,
     mem0Client,
     agentService,
     async close() {
+      maintenance.stop();
       await boardStorage.flushWrites();
       boardStorage.close?.();
       await redisCache?.close?.();

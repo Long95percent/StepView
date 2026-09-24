@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { openGlobalDatabase } from "../db/index.js";
+import { createDatabaseMaintenance } from "../db/maintenance.js";
 import { createAccountRepository } from "../db/repositories/accountRepository.js";
+import { GLOBAL_RETENTION_RULES } from "../db/retention.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -36,6 +38,9 @@ function verifyPassword(password, encoded) {
 export function createAccountStore({ dataDir, dbPath, sessionTtlHours = 168 } = {}) {
   const database = openGlobalDatabase({ dataDir, dbPath });
   const repository = createAccountRepository({ connection: database });
+  // 全局库的过期清理：启动时跑一次，之后每天一次。目前只有过期登录会话。
+  const maintenance = createDatabaseMaintenance({ connection: database, rules: GLOBAL_RETENTION_RULES });
+  maintenance.start();
 
   function startSession(account) {
     const createdAt = nowIso();
@@ -104,6 +109,7 @@ export function createAccountStore({ dataDir, dbPath, sessionTtlHours = 168 } = 
   }
 
   function close() {
+    maintenance.stop();
     database.close();
   }
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createConnection } from "../electron/db/connection.js";
 import {
+  GLOBAL_RETENTION_RULES,
   RETENTION_RULES,
   buildApprovalRetentionRules,
+  buildAgentRetentionRules,
   buildSnapshotRetentionRules,
   listRetentionRuns,
   runRetention,
@@ -16,8 +18,12 @@ function open() {
   const connection = createConnection({ dbPath: ":memory:" });
   connection.db.exec(`
     CREATE TABLE gateway_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE diary_entries (id TEXT PRIMARY KEY, status TEXT NOT NULL, deleted_at TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE agent_turns (turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE agent_turns (turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'done', created_at TEXT NOT NULL);
+    CREATE TABLE agent_signals (signal_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE agent_prompt_snapshots (snapshot_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE agent_mem0_sync_log (sync_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
   `);
   return connection;
 }
@@ -39,7 +45,13 @@ describe("retention rules", () => {
       "approvals-expired:board_change",
       "approvals-overflow:board_change",
       "snapshots-overflow:board",
+      "agent-signals-expired",
+      "agent-prompt-snapshots-expired",
+      "agent-mem0-sync-expired",
+      "agent-turns-abandoned",
+      "retention-runs-overflow",
     ]);
+    expect(GLOBAL_RETENTION_RULES.map((rule) => rule.id)).toEqual(["sessions-expired", "retention-runs-overflow"]);
     expect(validateRetentionRules(RETENTION_RULES)).toBe(RETENTION_RULES);
   });
 
@@ -280,5 +292,76 @@ describe("retention execution", () => {
     expect(runs[0].results[0]).toMatchObject({ id: "sessions", status: "applied", removed: 0 });
     expect(runs[0].startedAt).toBe(NOW.toISOString());
     connection.close();
+  });
+
+  it("clears agent diagnostics and abandoned turns but never finished turns", () => {
+    const connection = open();
+    insert(connection, "agent_signals", ["signal_id", "session_id", "created_at"], [
+      { signal_id: "old-signal", session_id: "s1", created_at: "2026-08-01T00:00:00.000Z" },
+      { signal_id: "new-signal", session_id: "s1", created_at: "2026-09-23T00:00:00.000Z" },
+    ]);
+    insert(connection, "agent_prompt_snapshots", ["snapshot_id", "session_id", "created_at"], [
+      { snapshot_id: "old-prompt", session_id: "s1", created_at: "2026-08-01T00:00:00.000Z" },
+      { snapshot_id: "new-prompt", session_id: "s1", created_at: "2026-09-23T00:00:00.000Z" },
+    ]);
+    insert(connection, "agent_mem0_sync_log", ["sync_id", "created_at"], [
+      { sync_id: "old-sync", created_at: "2026-08-01T00:00:00.000Z" },
+      { sync_id: "new-sync", created_at: "2026-09-23T00:00:00.000Z" },
+    ]);
+    insert(connection, "agent_turns", ["turn_id", "session_id", "status", "created_at"], [
+      { turn_id: "done-old", session_id: "s1", status: "done", created_at: "2020-01-01T00:00:00.000Z" },
+      { turn_id: "pending-old", session_id: "s1", status: "pending", created_at: "2026-09-01T00:00:00.000Z" },
+      { turn_id: "pending-new", session_id: "s1", status: "pending", created_at: "2026-09-23T00:00:00.000Z" },
+    ]);
+
+    const report = runRetention({ connection, rules: RETENTION_RULES, now: NOW, logger: quiet });
+
+    expect(ids(connection, "agent_signals", "signal_id")).toEqual(["new-signal"]);
+    expect(ids(connection, "agent_prompt_snapshots", "snapshot_id")).toEqual(["new-prompt"]);
+    expect(ids(connection, "agent_mem0_sync_log", "sync_id")).toEqual(["new-sync"]);
+    // 用户自己的聊天历史不动，只有没写完的旧轮次被清掉。
+    expect(ids(connection, "agent_turns", "turn_id")).toEqual(["done-old", "pending-new"]);
+    expect(report.results.find((item) => item.id === "agent-turns-abandoned")).toMatchObject({ removed: 1, rowsBefore: 3 });
+    connection.close();
+  });
+
+  it("clears expired gateway sessions and keeps the one expiring exactly now", () => {
+    const connection = open();
+    insert(connection, "sessions", ["session_id", "account_id", "expires_at", "created_at"], [
+      { session_id: "expired", account_id: "a1", expires_at: "2026-09-01T00:00:00.000Z", created_at: "2026-08-01T00:00:00.000Z" },
+      { session_id: "exactly-now", account_id: "a1", expires_at: NOW.toISOString(), created_at: "2026-09-01T00:00:00.000Z" },
+      { session_id: "alive", account_id: "a1", expires_at: "2026-10-01T00:00:00.000Z", created_at: "2026-09-01T00:00:00.000Z" },
+    ]);
+
+    const report = runRetention({ connection, rules: GLOBAL_RETENTION_RULES, now: NOW, logger: quiet });
+
+    expect(ids(connection, "sessions", "session_id")).toEqual(["alive", "exactly-now"]);
+    expect(report.results.find((item) => item.id === "sessions-expired")).toMatchObject({ status: "applied", removed: 1, rowsBefore: 3 });
+    connection.close();
+  });
+
+  it("records how many rows existed before each rule ran", () => {
+    const connection = open();
+    insert(connection, "agent_turns", ["turn_id", "session_id", "created_at"], [
+      { turn_id: "t1", session_id: "s1", created_at: "2026-01-01T00:00:00.000Z" },
+      { turn_id: "t2", session_id: "s1", created_at: "2026-01-02T00:00:00.000Z" },
+    ]);
+
+    runRetention({
+      connection,
+      rules: [{ id: "turns", table: "agent_turns", key: "turn_id", keep: { limit: 1, orderBy: "created_at DESC" } }],
+      now: NOW,
+      logger: quiet,
+    });
+
+    const [run] = listRetentionRuns(connection);
+    expect(run.results[0]).toMatchObject({ removed: 1, rowsBefore: 2 });
+    connection.close();
+  });
+
+  it("rejects malformed agent retention parameters", () => {
+    expect(buildAgentRetentionRules({ ttlDays: 0 })).toBeTruthy();
+    expect(() => validateRetentionRules(buildAgentRetentionRules({ ttlDays: 0 }))).toThrow(/正整数/);
+    expect(() => validateRetentionRules(buildAgentRetentionRules({ pendingTurnTtlDays: -1 }))).toThrow(/正整数/);
   });
 });

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAccountContext } from "../electron/gateway/accountContext.js";
+import { listRetentionRuns } from "../electron/db/retention.js";
 
 describe("account context", () => {
   let tempDir;
@@ -41,5 +42,16 @@ describe("account context", () => {
     expect(context.mode).toBe("personal");
     expect(context.dataDir).toBe(tempDir);
     expect(context.agentSqliteStore.dbPath).toBe(path.join(tempDir, "stepview.sqlite"));
+  });
+
+  it("sweeps its own database once when the context opens", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-context-maintenance-"));
+    context = createAccountContext({ account: { accountId: "account-a", username: "alice" }, accountsDir: tempDir });
+
+    const runs = listRetentionRuns(context.database);
+    expect(runs).toHaveLength(1);
+    // 账号库里没有审批、快照、Agent 数据时，规则仍然会被记录为已执行。
+    expect(runs[0].results.map((item) => item.id)).toContain("agent-signals-expired");
+    expect(context.maintenance.isRunning()).toBe(true);
   });
 });

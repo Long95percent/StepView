@@ -19,6 +19,20 @@ export const DEFAULT_APPROVAL_TTL_DAYS = 7;
 export const DEFAULT_MAX_PENDING_APPROVALS = 20;
 export const DEFAULT_MAX_SNAPSHOTS = 20;
 
+/** Agent 诊断类数据的保留天数：信号、提示词快照、Mem0 同步日志。它们不是用户内容，过期即可删。 */
+export const DEFAULT_AGENT_DIAGNOSTIC_TTL_DAYS = 30;
+
+/**
+ * 没写完的轮次保留天数。
+ *
+ * 只有 status = 'pending' 的轮次会被删——那是"用户中途关掉应用"留下的半截记录。
+ * 已经完成的对话轮次是用户自己的聊天历史，不设 TTL，永远不会被自动删除。
+ */
+export const DEFAULT_PENDING_TURN_TTL_DAYS = 3;
+
+/** 清理执行记录自身保留的条数，避免审计表自己无限增长。 */
+export const DEFAULT_RETENTION_RUN_LIMIT = 50;
+
 /**
  * 审批记录的保留规则。
  *
@@ -57,10 +71,57 @@ export function buildSnapshotRetentionRules({ kind = "board", maxSnapshots = DEF
   ];
 }
 
-/** 全局清理时使用的默认规则。Phase 4 接入定时执行后生效。 */
+/**
+ * Agent 运行期数据的保留规则。
+ *
+ * 只清诊断信息与半截轮次，不碰用户的会话、完成的轮次和长期记忆。
+ */
+export function buildAgentRetentionRules({
+  ttlDays = DEFAULT_AGENT_DIAGNOSTIC_TTL_DAYS,
+  pendingTurnTtlDays = DEFAULT_PENDING_TURN_TTL_DAYS,
+} = {}) {
+  return [
+    { id: "agent-signals-expired", table: "agent_signals", where: "created_at < :ttl", ttlDays },
+    { id: "agent-prompt-snapshots-expired", table: "agent_prompt_snapshots", where: "created_at < :ttl", ttlDays },
+    { id: "agent-mem0-sync-expired", table: "agent_mem0_sync_log", where: "created_at < :ttl", ttlDays },
+    {
+      id: "agent-turns-abandoned",
+      table: "agent_turns",
+      where: "status = 'pending' AND created_at < :ttl",
+      ttlDays: pendingTurnTtlDays,
+    },
+  ];
+}
+
+/** 清理记录自身的上限规则，每库一份。 */
+export function buildRetentionRunRules({ limit = DEFAULT_RETENTION_RUN_LIMIT } = {}) {
+  return [
+    {
+      id: "retention-runs-overflow",
+      table: "retention_runs",
+      key: "id",
+      keep: { limit, orderBy: "started_at DESC, id DESC" },
+    },
+  ];
+}
+
+/** 账号库的默认规则。启动时与每日各执行一次（见 maintenance.js）。 */
 export const RETENTION_RULES = Object.freeze([
   ...buildApprovalRetentionRules(),
   ...buildSnapshotRetentionRules(),
+  ...buildAgentRetentionRules(),
+  ...buildRetentionRunRules(),
+]);
+
+/**
+ * 全局库的默认规则。
+ *
+ * 全局库只有账号、会话、设置和它自己的清理记录，所以这里只管过期会话。
+ * 会话过期时间由登录时的 sessionTtlHours 决定，这里只负责把过期的行真正删掉。
+ */
+export const GLOBAL_RETENTION_RULES = Object.freeze([
+  { id: "sessions-expired", table: "sessions", where: "expires_at < :now" },
+  ...buildRetentionRunRules(),
 ]);
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -194,11 +255,13 @@ export function runRetention({ connection, rules = RETENTION_RULES, now = new Da
 
   for (const rule of rules) {
     if (!connection.tableExists(rule.table)) {
-      results.push({ id: rule.id, table: rule.table, status: "skipped", reason: "table-missing", removed: 0 });
+      results.push({ id: rule.id, table: rule.table, status: "skipped", reason: "table-missing", removed: 0, rowsBefore: 0 });
       continue;
     }
 
     const plans = [buildExpiryPlan(rule, { now }), buildKeepPlan(rule)].filter(Boolean);
+    // 执行前统计：清理记录里要能回答"这张表原来有多少行、这次删了多少"。
+    const rowsBefore = Number(db.prepare(`SELECT COUNT(*) AS count FROM ${rule.table}`).get().count || 0);
     let removed = 0;
     try {
       removed = connection.withTransaction(() => {
@@ -212,10 +275,10 @@ export function runRetention({ connection, rules = RETENTION_RULES, now = new Da
       });
     } catch (error) {
       logger.warn?.(`保留策略 ${rule.id} 执行失败`, error);
-      results.push({ id: rule.id, table: rule.table, status: "failed", reason: error.message, removed: 0 });
+      results.push({ id: rule.id, table: rule.table, status: "failed", reason: error.message, removed: 0, rowsBefore });
       continue;
     }
-    results.push({ id: rule.id, table: rule.table, status: "applied", reason: null, removed });
+    results.push({ id: rule.id, table: rule.table, status: "applied", reason: null, removed, rowsBefore });
   }
 
   const removedTotal = results.reduce((sum, item) => sum + item.removed, 0);

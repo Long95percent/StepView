@@ -58,7 +58,7 @@ electron/main.js                          Electron 主进程和 IPC 注册
 electron/preload.js                        安全暴露给 Renderer 的 API
 electron/config.js                         环境变量和运行模式配置
 electron/boardStorage.js                   Board 存储的薄适配器（读写都走仓储）
-electron/diaryService.js                   日记业务层（校验、回收站、节点备注导入）
+electron/diaryService.js                   日记业务层（两种类型、校验、回收站、节点备注非破坏导入）
 electron/agentService.js                   Agent 会话、Prompt、turn 生命周期
 
 electron/db/                               数据库层：唯一的数据入口
@@ -156,6 +156,76 @@ electron/db/
 | 日记变更日志 | 180 天且最多 500 条 |
 
 每条规则单独一个用例：只删该删的；刚好压在 TTL 上的记录不删；重跑不误删；每次执行的统计写进 `retention_runs`。
+
+### 2.3 日记子系统（每日日记 / 节点日记）
+
+日记是**两块界面共用一套数据**：日记板块（独立视图）和节点展开区里的原生日记。
+
+**两种类型不是一个开关，是数据本身的属性**
+
+| `kind` | 节点关联数 | 出现在哪里 |
+| --- | --- | --- |
+| `daily` | 0..n | 日记板块主视图（按天）、节点上的日期按钮排 |
+| `node` | **≥1** | 节点展开区的"原生日记"列表 |
+
+类型显式存进 `diary_entries.kind`，不靠"有没有挂节点"推导：一条不挂节点的可能是每日日记，
+一条挂着节点的也可能是每日日记，推导必然出错。
+
+"节点日记必须挂节点"这条不变量有三道防线，缺一不可：
+
+1. `src/diaryCore.js` 的 `normalizeDiaryInput`——前端和主进程共用的纯函数，界面在提交前就能提示；
+2. 仓储在**同一个事务**里写完关联后再校验一次，不满足就整体回滚（SQLite 跨不了表做 `CHECK`，
+   触发器也做不了延迟校验，只能这样）；
+3. 一条全库不变量测试：扫描整张表，不允许存在 `kind='node'` 却零 node 关联的条目。
+
+**节点被删掉时不删日记**
+
+`diary_links` 只打 `orphaned_at`，条目和正文一个字都不动——日记是用户写的东西，
+不该因为他在画布上整理结构就跟着消失。标记的触发点在 `electron/boardStorage.js`：
+画布保存时对比节点集合，把消失的节点通过 `onNodesRemoved` 回调报给 `diaryService.markNodesOrphaned`。
+放在保存这一个入口上，删节点 / 删任务 / 清空看板 / Agent 审批四条路径就都覆盖到了；
+回调抛错只记日志，不影响画布保存本身。
+
+**画布备注导入是非破坏的**
+
+`previewNodeNoteImport` / `importNodeNotes` 两条硬规则：**必须先 `confirm`**（否则只回预览），
+**画布上 `node.detail` 一个字都不动**。幂等靠 `kv` 表里的导入标记（`diary-import:node-notes:<accountId>`），
+不是靠查有没有导入过的条目——用户把导入出来的日记删掉之后，不该再自动长回来。
+两个方法都收一个可选的 `nodeIds`：节点面板上的入口只导那一个节点，
+不传时行为不变（迁移和批量的老路径照旧）。
+
+**前端边界**
+
+`src/diary/` 是这一块的组件目录，`main.jsx` 只留视图切换和与画布的联动：
+
+```
+src/diary/
+  diariesView.jsx       日记板块（按天 / 时间线 / 搜索 / 标签 / 回收站）
+  diaryEditor.jsx       新建 / 编辑表单（kind 不作为界面字段暴露）
+  nodeDiarySection.jsx  节点里的"原生日记 + 日期按钮排 + 画布备注导入"
+  dayDiaryPopover.jsx   点日期按钮弹出的当日弹层
+  diaryApi.js           统一数据入口：Electron 走 IPC，家庭模式走 HTTP
+  diaryViewCore.js      纯函数：按天分组、日期去重、chip 文案、弹层定位（可单测）
+```
+
+两个容易踩的坑，改动这一块之前先看一眼：
+
+- **节点卡片里的弹层必须 `createPortal` 挂到 `document.body`**。`.node` 上有 `transform` 和
+  `backdrop-filter`，这两个属性都会给 `position: fixed` 的后代造包含块，
+  于是 `.modalBackdrop` 会缩成节点卡片那么大（实测 208x448），弹窗直接溢出去、位置还跟着画布缩放跑。
+- **画布的鼠标/键盘处理要放行这一块**：`isCanvasPanTarget` 白名单里有 `.diaryPopover` / `.diaryBackdrop`；
+  键盘监听在弹层开着或画布不在前台时不响应 `Delete` / `Backspace`。少一处就会出现"点一下弹层把画布拖走了"。
+
+**Agent 这条路**
+
+Agent 碰不到日记表：写作只能走 `diary.propose_entry` 生成提案进统一审批队列，用户批准才落库；
+读取走 `diary.recent`（`diaryService.timeline`，两种类型都在里面，所以每条都带 `kind`）。
+提案的 `kind` 会一路带到落库那一刻，摘要和 diff 用的是"每日日记 / 节点日记"这种说法，
+不把 `daily` / `node` 这两个内部词摆给用户看。
+
+**注意 `src/agentMemory.js` 里的 `diarySignals` 不是日记条目**。它读的是 `node.detail`（画布备注），
+`diaryEntryId` 里装的其实是 node id；日记的 `kind` 在这条链路上不适用。
+真正的日记条目只经上面那两个工具进 Agent。
 
 **内存态三分类**
 
@@ -269,6 +339,10 @@ stateDiagram-v2
 ### 4.2 Board 派生层
 
 `src/agentMemory.js` 只负责从当前 Board 派生任务线、支线、节点、日记信号和用户状态快照。它不负责长期记忆 CRUD，不应在这里加入 SQLite、Mem0 或 embedding 逻辑。
+
+这里的 `diarySignals` **名不副实**：它从 `node.detail`（画布备注）派生，和 `diary_entries` 里的日记条目无关，
+`diaryEntryId` 装的其实是 node id。日记的 `kind` 在这条链路上不适用，别往这里加类型字段——
+真正的日记条目走 `diaryService`（见 2.3）。
 
 ### 4.3 长期记忆仓库
 
@@ -478,6 +552,8 @@ Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 G
 - 已软删除的记忆还没有物理清理规则：它会级联到三张子表，需要单独评审，暂时按"不删"处理。
 - 画布多标签页同时编辑仍是后写覆盖先写；要修得在保存时做乐观并发校验并配前端冲突提示（见 Phase 7 说明）。
 - 正式 Recall@K、Precision@K 和 Prompt Injection 评测集尚未建立。
+- 日记这块的**桌面模式界面只有人工验收**：容器里的 `Dockerfile` 设了 `ELECTRON_SKIP_BINARY_DOWNLOAD=1`，
+  只有 gateway + web，没有 Electron 运行时；家庭模式那条路已经用无头 Chrome 驱动真实界面跑通了。
 
 ## 9. 推荐扩展顺序
 

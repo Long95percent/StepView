@@ -1,10 +1,16 @@
 # StepView 日记系统重构实施计划（每日日记 / 节点日记）
 
-> 状态：**实施中**。Phase 1-5 已完成并各自独立提交；只剩 Phase 6（Agent 接入与文档）未开工。
+> 状态：**Phase 1-6 全部完成**，每个阶段各自独立提交。
 > 前置阅读：`docs/superpowers/plans/2026-09-24-database-layer-refactor.md`
 > 数据库地基（Phase 0-5）与日记数据层/服务层（Phase 6）已完成。
 > 日记界面已经落地：`src/diary/` 下有日记板块、编辑器、节点原生日记区、当日弹层，
-> 节点上的画布备注可以非破坏地导入成节点日记；进度看第七节的各阶段勾选。
+> 节点上的画布备注可以非破坏地导入成节点日记，Agent 也接上了（`kind` 一路带到落库）；
+> 各阶段细节看第七节。
+
+> **唯一没自动化的验收项**：手动清单第 9 条的**桌面模式**那一半。
+> 本仓库 `Dockerfile` 设了 `ELECTRON_SKIP_BINARY_DOWNLOAD=1`，容器里只有 gateway + web、
+> 没有 Electron 运行时，本机也没装 Electron 二进制；家庭模式那一半已由无头 Chrome 覆盖。
+> 在装有 Electron 的机器上人工过一遍 1-8 即可。
 
 ## 零、已确认的决策与注意点
 
@@ -523,12 +529,31 @@ Phase 4 的验收脚本只断言了"编辑器能开、能填、能存"，没量�
 - 验收脚本第一版**又漏清了节点日记**——日记列表默认筛"每日"，导入出来的是节点日记，不先切到"全部"根本看不见，
   于是断言全绿但库里留了一行。已在脚本里先切"全部"再清，并在计划里记下这个坑（Phase 4 也踩过同一次）。
 
-### Phase 6：Agent 接入与文档
+### Phase 6：Agent 接入与文档 ✅ 已完成
 
-- [ ] Agent 的 `diary.propose_entry` 提案带上 `kind`，提案摘要里说清是"节点日记"还是"每日日记"。
-- [ ] `src/agentMemory.js` 里引用日记信号的部分适配 `kind`（当前按 `diarySignals` 取，需确认口径）。
-- [ ] 更新 `docs/使用说明书.md` 与 `docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`。
-- [ ] 验证：`npm test` 全绿、`npm run build` 通过。
+- [x] Agent 的 `diary.propose_entry` 提案带上 `kind`，提案摘要里说清是"节点日记"还是"每日日记"。
+      工具的 `inputSchema` 是 `additionalProperties: false`，所以 `kind` 必须显式声明才进得来；
+      `daily` / `node` 这两个内部词只在库里和 schema 里出现，摘要与 diff 用的是
+      `新增节点日记「…」` / `修改节点日记「…」` / `类型：每日日记 → 节点日记`。
+      `kind` 一路活到落库那一刻：提案说是节点日记，批准后不会变成每日日记。
+- [x] `src/agentMemory.js` 里引用日记信号的部分适配 `kind`（当前按 `diarySignals` 取，需确认口径）。
+      **口径确认的结果是：这里没有 `kind` 可适配**。`diarySignals` 从 `node.detail`（画布备注）派生，
+      和 `diary_entries` 里的日记条目毫无关系，`diaryEntryId` 里装的其实是 node id。
+      硬加一个 `kind` 就是编数据。所以改成把这件事写清楚（代码注释 + 2.3 / 4.2 两处文档），
+      并补上真正的缺口：`timeline` 现在每条都带 `kind`——它两种类型都返回，
+      不带的话 Agent 和界面都分不出哪条是节点日记。
+- [x] 更新 `docs/使用说明书.md`（新增第 12 节"写日记"，原 12-14 顺延为 13-15）
+      与 `docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`（新增 2.3 日记子系统；4.2 补 `diarySignals` 的口径澄清；
+      已知限制里补上桌面模式只有人工验收）。
+- [x] 验证：`npm test` 全绿、`npm run build` 通过。
+
+**验证**
+
+- 55 个测试文件 344 个用例全绿（本阶段从 339 涨到 344），`npm run build` 通过。
+- 新增的用例覆盖：提案带 `kind` 一路到落库并在节点原生日记里查得到（HTTP 全链路）、
+  `kind='node'` 却没给节点的提案被拒且不入审批队列、把每日日记改成节点日记时摘要跟着变、
+  时间线每条都带 `kind`、以及"未声明的字段会被 schema 拒掉"——最后这条是前面几条的把关人，
+  没有它，`kind` 那几条有可能是空过的。
 
 ## 八、迁移规则
 

@@ -144,6 +144,17 @@ describe("diary service", () => {
     expect(service.list({ status: "all" })).toHaveLength(0);
   });
 
+  it("does not clear the orphaned mark when an entry is edited", () => {
+    const repository = createDiaryRepository({ connection: database, accountId: "account-a" });
+    const scoped = createDiaryService({ repository, accountId: "account-a", now: () => NOW });
+    const created = scoped.create({ content: "挂在节点上的记录", links: [{ targetType: "node", targetId: "node-7", role: "primary" }] });
+    repository.markLinksOrphaned({ targetType: "node", targetId: "node-7", now: NOW });
+
+    // 服务层更新时会自动把现有 links 一起交回去，这不能把"节点已删除"的标记冲掉。
+    scoped.update(created.diaryId, { content: "改了一个字" }, { expectedRev: created.rev });
+    expect(scoped.get(created.diaryId).links[0].orphanedAt).toBe(NOW.toISOString());
+  });
+
   it("keeps accounts isolated", () => {
     const created = service.create({ content: "只属于 account-a" });
     const other = createDiaryService({

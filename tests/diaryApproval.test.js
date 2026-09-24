@@ -77,6 +77,19 @@ describe("diary approvals", () => {
     expect(entries[0].title).toBe("");
   });
 
+  it("drops a decided proposal out of the pending queue", async () => {
+    const { result } = await toolRuntime.run("diary.propose_entry", { content: "会被批准" }, toolContext());
+    const rejected = await toolRuntime.run("diary.propose_entry", { content: "会被丢弃" }, toolContext());
+    expect(await approvalService.list("account-a")).toHaveLength(2);
+
+    await approvalService.decide(result.approvalId, "account-a", "approved");
+    await approvalService.decide(rejected.result.approvalId, "account-a", "rejected");
+
+    // 已经决定过的提案不能继续挂在"待确认"面板上。
+    expect(await approvalService.list("account-a")).toEqual([]);
+    expect(await approvalService.pendingCount("account-a")).toBe(0);
+  });
+
   it("drops the entry when the user rejects it", async () => {
     const { result } = await toolRuntime.run("diary.propose_entry", { title: "不要这条" }, toolContext());
 

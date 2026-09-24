@@ -60,8 +60,15 @@ function approvalView(entry) {
 export function createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository, diaryService } = {}) {
   if (!approvalManager) throw new Error("Approval service requires an approval manager.");
 
+  /**
+   * 待确认队列。
+   *
+   * 只回 pending：这是"待确认的修改"面板，已经决定过的提案不该继续挂在上面带一对按钮。
+   * 画布提案一直是按 pending 过滤的，记忆和日记提案也必须一样。
+   */
   async function list(accountId) {
-    const memoryItems = approvalManager.list(accountId).map(approvalView);
+    const pendingEntries = approvalManager.list(accountId).filter((entry) => entry.status === "pending");
+    const memoryItems = pendingEntries.map(approvalView);
     const boardItems = boardChangeStore
       ? (await boardChangeStore.list({ status: "pending", accountId })).map(boardProposalView)
       : [];
@@ -98,7 +105,7 @@ export function createApprovalService({ approvalManager, boardChangeStore, board
   }
 
   async function pendingCount(accountId) {
-    return (await list(accountId)).filter((item) => item.status === "pending").length;
+    return (await list(accountId)).length;
   }
 
   return { list, decide, pendingCount };

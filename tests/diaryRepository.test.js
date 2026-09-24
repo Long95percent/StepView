@@ -130,6 +130,44 @@ describe("diary repository", () => {
     expect(diary.listLinks(created.diaryId).map((link) => link.targetId)).toEqual(["task-1"]);
   });
 
+  it("keeps an orphaned link orphaned when the entry is edited", () => {
+    const created = diary.create(entry({ content: "第一版", links: [{ targetType: "node", targetId: "node-9", role: "primary" }] }));
+    diary.markLinksOrphaned({ targetType: "node", targetId: "node-9", now: NOW });
+
+    // 用户只是改了个字，把关联原样又交回来一次：orphaned_at 不能被抹掉。
+    diary.update(created.diaryId, entry({ content: "第二版", links: diary.listLinks(created.diaryId) }), { expectedRev: created.rev });
+    expect(diary.listLinks(created.diaryId)).toHaveLength(1);
+    expect(diary.listLinks(created.diaryId)[0].orphanedAt).toBe(NOW.toISOString());
+
+    // 换成另一个目标时，旧的那条才真的消失。
+    diary.update(created.diaryId, entry({ content: "第三版", links: [{ targetType: "node", targetId: "node-10" }] }), { expectedRev: 2 });
+    expect(diary.listLinks(created.diaryId).map((link) => link.targetId)).toEqual(["node-10"]);
+  });
+
+  it("applies the same day and target filters to search as to list", () => {
+    const linked = diary.create(entry({ content: "数据库重构的记录", occurredAt: "2026-09-10T02:00:00.000Z", links: [{ targetType: "node", targetId: "node-1" }] }));
+    diary.create(entry({ content: "数据库重构的复述", occurredAt: "2026-09-24T02:00:00.000Z" }));
+
+    expect(diary.search({ query: "数据库重构" })).toHaveLength(2);
+    expect(diary.search({ query: "数据库重构", from: "2026-09-20" }).map((item) => item.diaryId)).toEqual([diary.list({ from: "2026-09-20" })[0].diaryId]);
+    expect(diary.search({ query: "数据库重构", to: "2026-09-20" }).map((item) => item.diaryId)).toEqual([linked.diaryId]);
+    expect(diary.search({ query: "数据库重构", targetType: "node", targetId: "node-1" }).map((item) => item.diaryId)).toEqual([linked.diaryId]);
+  });
+
+  it("reports a revision conflict as a 409-flavoured error", () => {
+    const created = diary.create(entry({ content: "第一版" }));
+    diary.update(created.diaryId, entry({ content: "第二版" }), { expectedRev: created.rev });
+
+    try {
+      diary.update(created.diaryId, entry({ content: "抢写" }), { expectedRev: 1 });
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DiaryRevisionConflictError);
+      expect(error.statusCode).toBe(409);
+      expect(error.actualRev).toBe(2);
+    }
+  });
+
   it("marks canvas links as orphaned instead of deleting the diary", () => {
     const created = diary.create(entry({ content: "关联了一个节点", links: [{ targetType: "node", targetId: "node-9" }] }));
 

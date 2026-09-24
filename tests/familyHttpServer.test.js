@@ -182,8 +182,9 @@ describe("family HTTP gateway", () => {
 
     const updated = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "PUT", headers: alice, body: JSON.stringify({ content: "改过的正文", rev: created.rev }) }).then((response) => response.json());
     expect(updated).toMatchObject({ rev: 2, content: "改过的正文" });
+    // 版本对不上是"和当前状态冲突"，不是服务端错误。
     const conflict = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "PUT", headers: alice, body: JSON.stringify({ content: "抢写", rev: created.rev }) });
-    expect(conflict.status).toBe(500);
+    expect(conflict.status).toBe(409);
     expect((await conflict.json()).error).toContain("已经被改过");
 
     const board = { tasks: [{ id: "task-9", title: "家庭任务", nodes: [{ id: "node-9", title: "备注", detail: "写在节点上的话" }] }] };
@@ -246,6 +247,7 @@ describe("family HTTP gateway", () => {
 
     const decided = await fetch(`${baseUrl}/agent/approvals/decide`, { method: "POST", headers, body: JSON.stringify({ approvalId: pending[0].approvalId, decision: "approved" }) }).then((response) => response.json());
     expect(decided.approval.status).toBe("approved");
+    await expect(fetch(`${baseUrl}/agent/approvals`, { headers }).then((response) => response.json())).resolves.toEqual([]);
     await expect(fetch(`${baseUrl}/diary`, { headers }).then((response) => response.json())).resolves.toEqual([
       expect.objectContaining({ title: "Agent 写的日记", content: "今天把日记接进了审批队列", source: "agent" }),
     ]);

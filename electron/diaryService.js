@@ -176,8 +176,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     return repository.listTags();
   }
 
+  /** 挂在某个画布节点/支线/任务上的日记。默认和 list 一样只看 active，需要连回收站一起看时显式传 status。 */
   function listForTarget(options = {}) {
-    return repository.list({ ...options, status: options.status ?? "all" });
+    return repository.list({ ...options, status: options.status ?? "active" });
   }
 
   function listRevisions(diaryId, options = {}) {
@@ -207,7 +208,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     for (const task of tasks) {
       for (const node of Array.isArray(task?.nodes) ? task.nodes : []) {
         const content = String(node?.detail ?? "").trim();
-        if (!content) continue;
+        // 没有 id 的节点导不了：关联要指向真实节点，不能凭空造一个 "undefined"。
+        if (!content || !node?.id) continue;
         collected.push({
           nodeId: String(node.id),
           taskId: task?.id ? String(task.id) : null,

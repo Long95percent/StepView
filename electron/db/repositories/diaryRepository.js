@@ -6,6 +6,7 @@ export class DiaryRevisionConflictError extends Error {
     super(message);
     this.name = "DiaryRevisionConflictError";
     this.code = "DIARY_REVISION_CONFLICT";
+    this.statusCode = 409;
     this.diaryId = diaryId;
     this.expectedRev = expectedRev;
     this.actualRev = actualRev;
@@ -74,12 +75,15 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   `);
   const deleteEntryStatement = db.prepare("DELETE FROM diary_entries WHERE id = ? AND account_id = ?");
 
-  const insertLinkStatement = db.prepare(`
-    INSERT INTO diary_links (id, account_id, diary_id, target_type, target_id, task_id, role, created_by, orphaned_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
   const selectLinksStatement = db.prepare("SELECT * FROM diary_links WHERE diary_id = ? AND account_id = ? ORDER BY created_at ASC");
-  const deleteLinksStatement = db.prepare("DELETE FROM diary_links WHERE diary_id = ? AND account_id = ?");
+  // 已存在的关联只更新角色，不动 orphaned_at / created_by / created_at：
+  // 否则用户改一个错别字，之前"节点已被删掉"的标记就被顺手抹掉了。
+  const upsertLinkStatement = db.prepare(`
+    INSERT INTO diary_links (id, account_id, diary_id, target_type, target_id, task_id, role, created_by, orphaned_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+    ON CONFLICT (diary_id, target_type, target_id) DO UPDATE SET task_id = excluded.task_id, role = excluded.role
+  `);
+  const deleteLinkStatement = db.prepare("DELETE FROM diary_links WHERE id = ? AND account_id = ?");
   const selectLinksForTargetStatement = db.prepare(
     "SELECT * FROM diary_links WHERE account_id = ? AND target_type = ? AND target_id = ? ORDER BY created_at ASC",
   );
@@ -163,9 +167,13 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   }
 
   function syncLinks(diaryId, links, nowIso) {
-    deleteLinksStatement.run(diaryId, accountId);
+    // 保留这次仍然存在的关联，只删掉真的被移除的那些——连带它们的 orphaned_at 一起保留。
+    const kept = new Set(links.map((link) => `${link.targetType}:${link.targetId}`));
+    for (const row of selectLinksStatement.all(diaryId, accountId)) {
+      if (!kept.has(`${row.target_type}:${row.target_id}`)) deleteLinkStatement.run(row.id, accountId);
+    }
     for (const link of links) {
-      insertLinkStatement.run(
+      upsertLinkStatement.run(
         makeId("diary-link"),
         accountId,
         diaryId,
@@ -174,7 +182,6 @@ export function createDiaryRepository({ connection, accountId } = {}) {
         link.taskId ?? null,
         link.role || "context",
         link.createdBy || "user",
-        null,
         nowIso,
       );
     }
@@ -406,6 +413,19 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     if (filter.tag) {
       clauses.push("AND e.id IN (SELECT et.diary_id FROM diary_entry_tags et JOIN diary_tags t ON t.id = et.tag_id WHERE t.name = ?)");
       params.push(String(filter.tag));
+    }
+    // 和 list 保持同一套筛选：调用方按天/按节点筛的时候不该只有 list 生效。
+    if (filter.from) {
+      clauses.push("AND e.occurred_day >= ?");
+      params.push(String(filter.from));
+    }
+    if (filter.to) {
+      clauses.push("AND e.occurred_day <= ?");
+      params.push(String(filter.to));
+    }
+    if (filter.targetType && filter.targetId) {
+      clauses.push("AND e.id IN (SELECT diary_id FROM diary_links WHERE account_id = ? AND target_type = ? AND target_id = ?)");
+      params.push(accountId, String(filter.targetType), String(filter.targetId));
     }
     clauses.push("ORDER BY e.occurred_at DESC, e.id DESC LIMIT ? OFFSET ?");
     params.push(limit, offset);

@@ -146,6 +146,75 @@ describe("diary service", () => {
     expect(service.list({ status: "all" })).toHaveLength(0);
   });
 
+  it("keeps the kind when a node diary is edited", () => {
+    const created = service.create({
+      content: "这个节点上的实现细节",
+      kind: "node",
+      links: [{ targetType: "node", targetId: "node-1", role: "primary" }],
+    });
+    expect(created.kind).toBe("node");
+
+    // 关键回归：只改正文、不传 kind 时，不能把它静默降级成每日日记——
+    // 一旦降级，这条日记会从节点的"原生日记"里消失，而且数据看起来没坏。
+    const updated = service.update(created.diaryId, { content: "改过的实现细节", rev: created.rev });
+    expect(updated).toMatchObject({ kind: "node", content: "改过的实现细节", rev: 2 });
+    expect(service.list({ kind: "node" }).map((item) => item.diaryId)).toEqual([created.diaryId]);
+    expect(service.list({ kind: "daily" })).toEqual([]);
+
+    // 类型没变时不该出现在变更说明里（否则每次编辑都报一行"类型：node → node"）。
+    const proposal = service.planChange({ diaryId: created.diaryId, content: "再改一次" }, { operation: "update" });
+    expect(proposal.diff.lines.join("\n")).not.toContain("类型：");
+  });
+
+  it("separates a node's own entries from the daily entries linked to it", () => {
+    const nodeDiary = service.create({ content: "节点上的记录", kind: "node", links: [{ targetType: "node", targetId: "node-1" }] });
+    service.create({
+      content: "周六那天顺便关联了这个节点",
+      occurredAt: "2026-09-19T02:00:00.000Z",
+      kind: "daily",
+      links: [{ targetType: "node", targetId: "node-1" }],
+    });
+    // 同一天第二条：日期按钮要能显示"这天有两条"
+    service.create({
+      content: "周六补记",
+      occurredAt: "2026-09-19T09:00:00.000Z",
+      kind: "daily",
+      links: [{ targetType: "node", targetId: "node-1" }],
+    });
+    // 另一个日期 + 另一个节点，都不该混进来
+    service.create({ content: "别的日子", occurredAt: "2026-09-20T02:00:00.000Z", kind: "daily", links: [{ targetType: "node", targetId: "node-1" }] });
+    service.create({ content: "别的节点", occurredAt: "2026-09-19T02:00:00.000Z", kind: "daily", links: [{ targetType: "node", targetId: "node-2" }] });
+    // 没有关联的每日日记也不该出现在任何节点上
+    service.create({ content: "没关联任何节点", occurredAt: "2026-09-19T02:00:00.000Z" });
+    // 节点日记不属于"每日"，不能被日期按钮带出来
+    expect(service.listNodeEntries("node-1").map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
+
+    expect(service.listDailyDaysForNode("node-1")).toEqual([
+      { day: "2026-09-20", count: 1 },
+      { day: "2026-09-19", count: 2 },
+    ]);
+    expect(service.listDailyDaysForNode("node-2")).toEqual([{ day: "2026-09-19", count: 1 }]);
+    expect(service.listDailyDaysForNode("node-unknown")).toEqual([]);
+  });
+
+  it("counts the days for a node beyond the list page limit", () => {
+    // 按天去重必须走 SQL：list 有条数上限，先取列表再在内存里归并会凭空少几天。
+    for (let index = 0; index < 260; index += 1) {
+      service.create({
+        content: `第 ${index} 条`,
+        occurredAt: `2026-08-${String((index % 28) + 1).padStart(2, "0")}T02:00:00.000Z`,
+        kind: "daily",
+        links: [{ targetType: "node", targetId: "node-1" }],
+      });
+    }
+
+    const days = service.listDailyDaysForNode("node-1");
+    expect(service.list({ kind: "daily", limit: 200 })).toHaveLength(200);
+    expect(days).toHaveLength(28);
+    expect(days.reduce((total, item) => total + item.count, 0)).toBe(260);
+    expect(days[0].day).toBe("2026-08-28");
+  });
+
   it("does not clear the orphaned mark when an entry is edited", () => {
     const repository = createDiaryRepository({ connection: database, accountId: "account-a" });
     const scoped = createDiaryService({ repository, accountId: "account-a", now: () => NOW });

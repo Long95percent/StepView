@@ -488,6 +488,37 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     return selectLinksStatement.all(String(diaryId), accountId).map(linkFromRow);
   }
 
+  /**
+   * 某个画布目标（通常是节点）关联到的每日日记，按天去重，返回 [{ day, count }]。
+   *
+   * 去重必须在这里用 SQL 做，不能先 list 再在内存里归并：list 有条数上限，
+   * 一旦关联的日记比上限多，"按天"的结果就会凭空少几天——而且少的是哪几天还看不出来。
+   */
+  function listDailyDaysForTarget({ targetType = "node", targetId, status = "active", from = null, to = null } = {}) {
+    if (!targetId) return [];
+    const clauses = [
+      `SELECT e.occurred_day AS day, COUNT(*) AS count
+       FROM diary_entries e
+       WHERE e.account_id = ? AND e.kind = 'daily'
+         AND e.id IN (SELECT diary_id FROM diary_links WHERE account_id = ? AND target_type = ? AND target_id = ?)`,
+    ];
+    const params = [accountId, accountId, String(targetType), String(targetId)];
+    if (status && status !== "all") {
+      clauses.push("AND e.status = ?");
+      params.push(status);
+    }
+    if (from) {
+      clauses.push("AND e.occurred_day >= ?");
+      params.push(String(from));
+    }
+    if (to) {
+      clauses.push("AND e.occurred_day <= ?");
+      params.push(String(to));
+    }
+    clauses.push("GROUP BY e.occurred_day ORDER BY e.occurred_day DESC");
+    return db.prepare(clauses.join(" ")).all(...params).map((row) => ({ day: row.day, count: Number(row.count || 0) }));
+  }
+
   function listLinksForTarget({ targetType, targetId }) {
     return selectLinksForTargetStatement.all(accountId, String(targetType), String(targetId)).map(linkFromRow);
   }
@@ -572,6 +603,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     search,
     listLinks,
     listLinksForTarget,
+    listDailyDaysForTarget,
     markLinksOrphaned,
     listTags,
     listRevisions,

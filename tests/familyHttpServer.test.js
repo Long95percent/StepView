@@ -185,7 +185,10 @@ describe("family HTTP gateway", () => {
     // 版本对不上是"和当前状态冲突"，不是服务端错误。
     const conflict = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "PUT", headers: alice, body: JSON.stringify({ content: "抢写", rev: created.rev }) });
     expect(conflict.status).toBe(409);
-    expect((await conflict.json()).error).toContain("已经被改过");
+    const conflictBody = await conflict.json();
+    expect(conflictBody.error).toContain("已经被改过");
+    // 带上 code，界面才不用去比对中文句子来判断该不该"重新载入"。
+    expect(conflictBody.code).toBe("DIARY_REVISION_CONFLICT");
 
     const board = { tasks: [{ id: "task-9", title: "家庭任务", nodes: [{ id: "node-9", title: "备注", detail: "写在节点上的话" }] }] };
     await fetch(`${baseUrl}/board`, { method: "PUT", headers: alice, body: JSON.stringify(board) });
@@ -203,8 +206,67 @@ describe("family HTTP gateway", () => {
     const trashed = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "DELETE", headers: alice }).then((response) => response.json());
     expect(trashed).toMatchObject({ status: "trashed" });
     expect(await fetch(`${baseUrl}/diary`, { headers: alice }).then((response) => response.json())).toHaveLength(1);
+    // 家庭模式以前只有丢掉和彻底删除，没有"还原"这个入口。
+    const restored = await fetch(`${baseUrl}/diary/${created.diaryId}/restore`, { method: "POST", headers: alice }).then((response) => response.json());
+    expect(restored).toMatchObject({ status: "active", deletedAt: null });
+    await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "DELETE", headers: alice });
     const purged = await fetch(`${baseUrl}/diary/${created.diaryId}?purge=1`, { method: "DELETE", headers: alice }).then((response) => response.json());
     expect(purged).toEqual({ ok: true, diaryId: created.diaryId });
+  });
+
+  it("serves a node's own entries and its day buttons over HTTP", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-diary-node-"));
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+    const jsonHeaders = { "Content-Type": "application/json" };
+
+    const registered = await fetch(`${baseUrl}/accounts/register`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ username: "gina", password: "password-1" }) }).then((response) => response.json());
+    const headers = { Authorization: `Bearer ${registered.sessionId}`, ...jsonHeaders };
+    const post = (body) => fetch(`${baseUrl}/diary`, { method: "POST", headers, body: JSON.stringify(body) }).then((response) => response.json());
+    const get = (path) => fetch(`${baseUrl}${path}`, { headers }).then((response) => response.json());
+
+    // 节点日记必须挂在节点上：HTTP 上也要是 400 + 可判别的 code，而不是 500。
+    // 这里拿到的是 diaryCore 的 DIARY_INPUT_INVALID——它是第一道防线；
+    // 仓储的 DIARY_NODE_LINK_REQUIRED 只在绕过 normalizeDiaryInput 时才会露头（见仓储单测）。
+    const rejected = await fetch(`${baseUrl}/diary`, { method: "POST", headers, body: JSON.stringify({ content: "没有归属", kind: "node" }) });
+    expect(rejected.status).toBe(400);
+    expect((await rejected.json()).code).toBe("DIARY_INPUT_INVALID");
+
+    const nodeDiary = await post({ content: "节点上的实现细节", kind: "node", links: [{ targetType: "node", targetId: "node-1", role: "primary" }] });
+    expect(nodeDiary.kind).toBe("node");
+    await post({ content: "周六", occurredAt: "2026-09-19T02:00:00.000Z", kind: "daily", links: [{ targetType: "node", targetId: "node-1" }] });
+    await post({ content: "周六补记", occurredAt: "2026-09-19T09:00:00.000Z", kind: "daily", links: [{ targetType: "node", targetId: "node-1" }] });
+    await post({ content: "周日", occurredAt: "2026-09-20T02:00:00.000Z", kind: "daily", links: [{ targetType: "node", targetId: "node-1" }] });
+    await post({ content: "没关联任何节点", occurredAt: "2026-09-19T02:00:00.000Z", kind: "daily" });
+
+    expect(await get("/diary?kind=node")).toHaveLength(1);
+    expect(await get("/diary?kind=daily")).toHaveLength(4);
+    // 节点上的原生日记
+    expect((await get("/diary?kind=node&targetType=node&targetId=node-1")).map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
+    // 节点上的日期按钮：按天去重、倒序、带条数
+    expect(await get("/diary/days?nodeId=node-1")).toEqual([
+      { day: "2026-09-20", count: 1 },
+      { day: "2026-09-19", count: 2 },
+    ]);
+    expect(await get("/diary/days?nodeId=node-unknown")).toEqual([]);
+    // "/diary/days" 不能被当成一条日记的 id（否则会变成 404）
+    expect((await fetch(`${baseUrl}/diary/days`, { headers })).status).toBe(200);
+    expect(await get(`/diary/${nodeDiary.diaryId}/revisions`)).toHaveLength(1);
+    expect(await get("/diary/timeline?kind=node")).toHaveLength(1);
   });
   it("stages agent diary entries in the shared approval queue", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-diary-approval-"));

@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld("stepview", {
     timeline: (options) => ipcRenderer.invoke("diary:timeline", options),
     listTags: () => ipcRenderer.invoke("diary:tags"),
     listRevisions: (request) => ipcRenderer.invoke("diary:list-revisions", request),
+    listNodeEntries: (request) => ipcRenderer.invoke("diary:list-node-entries", request),
+    listDailyDays: (request) => ipcRenderer.invoke("diary:list-daily-days", request),
     previewNodeNotes: () => ipcRenderer.invoke("diary:preview-node-notes"),
     importNodeNotes: (input) => ipcRenderer.invoke("diary:import-node-notes", input),
   },

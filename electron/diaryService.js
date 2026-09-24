@@ -60,6 +60,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
   function mergeEntry(diaryId, input = {}) {
     const current = requireEntry(diaryId, repository.get(diaryId));
     const merged = normalize({
+      // kind 必须一起带上：漏了它，编辑一条节点日记会把它静默降级成每日日记，
+      // 于是这条日记从节点的"原生日记"里消失——正是这一版要防的那类静默数据损坏。
+      kind: input.kind ?? current.kind,
       title: input.title ?? current.title,
       content: input.content ?? current.content,
       occurredAt: input.occurredAt ?? current.occurredAt,
@@ -89,6 +92,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
 
   function changeLines(current, next) {
     const lines = [];
+    if (current.kind !== next.kind) lines.push(`类型：${current.kind} → ${next.kind}`);
     if (current.title !== next.title) lines.push(`标题「${current.title || "（空）"}」→「${next.title || "（空）"}」`);
     if (current.content !== next.content) {
       lines.push(`正文：${summarizeDiaryEntry(current, { length: 40 }) || "（空）"} → ${summarizeDiaryEntry(next, { length: 40 }) || "（空）"}`);
@@ -179,6 +183,30 @@ export function createDiaryService({ repository, accountId, now = () => new Date
   /** 挂在某个画布节点/支线/任务上的日记。默认和 list 一样只看 active，需要连回收站一起看时显式传 status。 */
   function listForTarget(options = {}) {
     return repository.list({ ...options, status: options.status ?? "active" });
+  }
+
+  /**
+   * 某个节点上的**原生日记**：节点日记，且必须挂在这个节点上。
+   *
+   * 就是界面上节点展开后上半段那一列表。
+   */
+  function listNodeEntries(nodeId, options = {}) {
+    return repository.list({
+      ...options,
+      status: options.status ?? "active",
+      kind: "node",
+      targetType: "node",
+      targetId: nodeId,
+    });
+  }
+
+  /**
+   * 某个节点关联到的**每日日记**，按天去重，返回 [{ day, count }]（倒序）。
+   *
+   * 就是节点上那排"标有日期的按钮"的数据源：一天有多条时靠 count 显示角标。
+   */
+  function listDailyDaysForNode(nodeId, options = {}) {
+    return repository.listDailyDaysForTarget({ ...options, targetType: "node", targetId: nodeId });
   }
 
   function listRevisions(diaryId, options = {}) {
@@ -290,6 +318,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     timeline,
     listTags,
     listForTarget,
+    listNodeEntries,
+    listDailyDaysForNode,
     listRevisions,
     trash,
     restore,

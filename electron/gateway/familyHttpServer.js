@@ -67,6 +67,7 @@ function diaryListOptions(url) {
   const numberOrUndefined = (name) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
   return {
     status: url.searchParams.get("status") || undefined,
+    kind: url.searchParams.get("kind") || undefined,
     from: url.searchParams.get("from") || undefined,
     to: url.searchParams.get("to") || undefined,
     tag: url.searchParams.get("tag") || undefined,
@@ -189,12 +190,29 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         const { context } = authenticated(request);
         return json(response, 200, context.diaryService.timeline(diaryListOptions(url)), origin);
       }
+      // 节点上那排"标有日期的按钮"的数据源：某个节点关联到的每日日记，按天去重。
+      // 必须放在下面的通用 /api/diary/:id 之前，否则 "days" 会被当成一条日记的 id。
+      if (request.method === "GET" && url.pathname === "/api/diary/days") {
+        const { context } = authenticated(request);
+        return json(response, 200, context.diaryService.listDailyDaysForNode(url.searchParams.get("nodeId") || "", diaryListOptions(url)), origin);
+      }
       if (url.pathname === "/api/diary/import-node-notes") {
         const { context } = authenticated(request);
         await context.boardStorage.flushWrites();
         const board = await context.boardStorage.readBoard();
         if (request.method === "GET") return json(response, 200, context.diaryService.previewNodeNoteImport(board), origin);
         if (request.method === "POST") return json(response, 200, context.diaryService.importNodeNotes(board, await readBody(request)), origin);
+      }
+      const diaryRestoreMatch = /^\/api\/diary\/([^/]+)\/restore$/.exec(url.pathname);
+      if (diaryRestoreMatch && request.method === "POST") {
+        const { context } = authenticated(request);
+        return json(response, 200, context.diaryService.restore(decodeURIComponent(diaryRestoreMatch[1])), origin);
+      }
+      const diaryRevisionsMatch = /^\/api\/diary\/([^/]+)\/revisions$/.exec(url.pathname);
+      if (diaryRevisionsMatch && request.method === "GET") {
+        const { context } = authenticated(request);
+        const limit = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined;
+        return json(response, 200, context.diaryService.listRevisions(decodeURIComponent(diaryRevisionsMatch[1]), { limit }), origin);
       }
       const diaryEntryMatch = /^\/api\/diary\/([^/]+)$/.exec(url.pathname);
       if (diaryEntryMatch) {
@@ -258,7 +276,9 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
       }
       return json(response, 404, { error: "Not found." }, origin);
     } catch (error) {
-      return json(response, error.statusCode || 500, { error: error.message || "Gateway request failed." }, origin);
+      // 带上 code：界面要靠它区分"版本冲突（重新载入）"和"输入不合法（改内容）"，
+      // 只靠 HTTP 状态码不够精确，而且这里和 IPC 通道要能被同一组用例对拍。
+      return json(response, error.statusCode || 500, { error: error.message || "Gateway request failed.", code: error.code || null }, origin);
     }
   });
 

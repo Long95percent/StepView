@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
 import { createGateway } from "./gateway/createGateway.js";
+import { createDiaryIpcHandlers } from "./diaryIpcHandlers.js";
 import { streamOpenAIChat } from "./openAiStream.js";
 import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
 import { completeChatWithTools } from "./agentChatCompletion.js";
@@ -221,27 +222,10 @@ app.whenReady().then(async () => {
     return { ok: true, restored: result.restored.map((entry) => entry.name), kept: result.kept.map((entry) => entry.path) };
   });
 
-  ipcMain.handle("diary:list", (_event, options = {}) => gateway.getContext().diaryService.list(options || {}));
-  ipcMain.handle("diary:get", (_event, request = {}) => gateway.getContext().diaryService.get(request.diaryId));
-  ipcMain.handle("diary:create", (_event, input = {}) => gateway.getContext().diaryService.create(input));
-  ipcMain.handle("diary:update", (_event, request = {}) => gateway.getContext().diaryService.update(request.diaryId, request, { expectedRev: request.expectedRev ?? request.rev }));
-  ipcMain.handle("diary:trash", (_event, request = {}) => gateway.getContext().diaryService.trash(request.diaryId));
-  ipcMain.handle("diary:restore", (_event, request = {}) => gateway.getContext().diaryService.restore(request.diaryId));
-  ipcMain.handle("diary:remove", (_event, request = {}) => gateway.getContext().diaryService.remove(request.diaryId));
-  ipcMain.handle("diary:search", (_event, options = {}) => gateway.getContext().diaryService.search(options || {}));
-  ipcMain.handle("diary:timeline", (_event, options = {}) => gateway.getContext().diaryService.timeline(options || {}));
-  ipcMain.handle("diary:tags", () => gateway.getContext().diaryService.listTags());
-  ipcMain.handle("diary:list-revisions", (_event, request = {}) => gateway.getContext().diaryService.listRevisions(request.diaryId, request));
-  ipcMain.handle("diary:preview-node-notes", async () => {
-    const context = gateway.getContext();
-    await context.boardStorage.flushWrites();
-    return context.diaryService.previewNodeNoteImport(await context.boardStorage.readBoard());
-  });
-  ipcMain.handle("diary:import-node-notes", async (_event, input = {}) => {
-    const context = gateway.getContext();
-    await context.boardStorage.flushWrites();
-    return context.diaryService.importNodeNotes(await context.boardStorage.readBoard(), input || {});
-  });
+  // 日记通道集中定义在 diaryIpcHandlers.js，好让 IPC 与 HTTP 两条路能被同一组用例对拍。
+  for (const [channel, handler] of Object.entries(createDiaryIpcHandlers({ getContext: () => gateway.getContext() }))) {
+    ipcMain.handle(channel, handler);
+  }
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());
   });

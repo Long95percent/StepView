@@ -4,8 +4,8 @@ import { buildAgentMemory } from "../../src/agentMemory.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
 import { streamOpenAIChat } from "../openAiStream.js";
-
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
+import { completeChatWithTools } from "../agentChatCompletion.js";
 
 function json(response, status, payload, origin) {
   response.writeHead(status, {
@@ -53,17 +53,16 @@ function serializeSessionViews(views) {
   return { sessions: Object.fromEntries(Object.entries(views || {}).map(([id, view]) => [id, serializeSessionView(view)])), updatedAt: new Date().toISOString() };
 }
 
-async function askOpenAI({ apiKey, model, baseUrl, messages }) {
+async function askOpenAI({ apiKey, model, baseUrl, messages, tools, runTool, complete = completeChatWithTools }) {
   if (!String(apiKey || "").trim()) throw Object.assign(new Error("Missing OpenAI API key."), { statusCode: 400 });
-  const selectedModel = String(model || "gpt-5.1").trim() || "gpt-5.1";
-  const root = String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, "");
-  const response = await fetch(`${root}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${String(apiKey).trim()}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: selectedModel, messages }) });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(payload?.error?.message || `OpenAI request failed with ${response.status}.`), { statusCode: 502 });
-  return { text: payload.choices?.[0]?.message?.content?.trim() || "OpenAI returned an empty response.", model: selectedModel };
+  try {
+    return await complete({ apiKey, model, baseUrl, messages, tools, runTool });
+  } catch (error) {
+    throw Object.assign(new Error(error.message || "OpenAI request failed."), { statusCode: 502 });
+  }
 }
 
-export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat } = {}) {
+export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools } = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
   const contexts = new Map();
@@ -99,7 +98,13 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     });
     const send = (event) => response.write(`data: ${JSON.stringify(event)}\n\n`);
     try {
-      const result = await openAiStream({ ...input, messages: prepared.prompt.messages, onDelta: (delta) => send({ type: "delta", delta }) });
+      const result = await openAiStream({
+        ...input,
+        messages: prepared.prompt.messages,
+        tools: openAiToolSchemas(context.toolRegistry),
+        runTool: createToolRunner(context, sessionId),
+        onDelta: (delta) => send({ type: "delta", delta }),
+      });
       const view = await context.agentService.completeChat(prepared, { assistantText: result.text, model: result.model, source: "openai" });
       send({ type: "complete", result: { text: result.text, model: result.model, sessionId, session: serializeSessionView(view) } });
     } catch (error) {
@@ -152,6 +157,16 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         context.agentService.syncSessionsFromBoardMemory(buildAgentMemory(await context.boardStorage.readBoard()));
         return json(response, 200, serializeSessionViews(await context.agentService.listSessionViews()), origin);
       }
+      if (request.method === "GET" && url.pathname === "/api/agent/approvals") {
+        const { context } = authenticated(request);
+        return json(response, 200, await context.approvalService.list(context.accountId), origin);
+      }
+      if (request.method === "POST" && url.pathname === "/api/agent/approvals/decide") {
+        const { context } = authenticated(request);
+        const input = await readBody(request);
+        const result = await context.approvalService.decide(String(input.approvalId || ""), context.accountId, String(input.decision || ""));
+        return json(response, 200, result, origin);
+      }
       if (request.method === "POST" && url.pathname === "/api/agent/chat") {
         const { context } = authenticated(request);
         const input = await readBody(request);
@@ -163,7 +178,13 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         context.agentService.syncSessionsFromBoardMemory(boardMemory);
         const prepared = await context.agentService.prepareChat({ sessionId, userText, boardMemory, model: input.model || "gpt-5.1" });
         try {
-          const result = await askOpenAI({ ...input, messages: prepared.prompt.messages });
+          const result = await askOpenAI({
+            ...input,
+            messages: prepared.prompt.messages,
+            tools: openAiToolSchemas(context.toolRegistry),
+            runTool: createToolRunner(context, sessionId),
+            complete: openAiComplete,
+          });
           const view = await context.agentService.completeChat(prepared, { assistantText: result.text, model: result.model, source: "openai" });
           return json(response, 200, { text: result.text, model: result.model, sessionId, session: serializeSessionView(view) }, origin);
         } catch (error) {

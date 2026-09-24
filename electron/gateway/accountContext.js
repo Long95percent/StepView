@@ -13,6 +13,9 @@ import { createToolRegistry } from "../agent/toolRegistry.js";
 import { createToolRuntime } from "../agent/toolRuntime.js";
 import { registerBuiltInTools } from "../agent/builtInTools.js";
 import { createApprovalManager } from "../agent/approvalManager.js";
+import { createBoardChangeStore } from "../agent/boardChangeStore.js";
+import { createBoardChangeExecutor } from "../agent/boardChangeExecutor.js";
+import { createApprovalService } from "../agent/approvalService.js";
 
 export function createAccountContext({
   account,
@@ -37,6 +40,9 @@ export function createAccountContext({
   registerBuiltInTools({ registry: toolRegistry });
   const toolRuntime = createToolRuntime({ registry: toolRegistry });
   const approvalManager = createApprovalManager();
+  const boardChangeStore = createBoardChangeStore({ dataDir });
+  const boardChangeExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
+  const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository });
   const redisCache = redisCacheFactory({ namespace: `stepview:${account.accountId}:agent` });
   const mem0Client = mem0ClientFactory({ userId: account.accountId });
   const agentService = agentServiceFactory({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: memoryExtractorWithPolicy, contextOrchestrator });
@@ -56,6 +62,9 @@ export function createAccountContext({
     toolRegistry,
     toolRuntime,
     approvalManager,
+    boardChangeStore,
+    boardChangeExecutor,
+    approvalService,
     redisCache,
     mem0Client,
     agentService,

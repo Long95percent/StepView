@@ -76,6 +76,12 @@ npm run desktop
 
 ```bash
 npm run family
+
+# 停止
+npm run family:stop
+
+# 访问
+http://localhost:5173/
 ```
 
 `family` 会检查 Docker Desktop、项目依赖、数据目录和端口，然后构建并启动整套服务。任一必需项不满足时会中止并给出修复方式。

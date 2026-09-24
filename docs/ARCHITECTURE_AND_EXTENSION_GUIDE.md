@@ -77,7 +77,15 @@ electron/agent/
   toolRegistry.js                           工具注册和发现
   toolRuntime.js                            工具校验、权限、超时和审计
   builtInTools.js                           内置 Board/Memory/Agent 工具
+  toolSchema.js                             工具定义规范化和 input schema 校验
+  toolBridge.js                             各 Gateway 共用的工具上下文和 OpenAI schema 适配
+  tools/                                    统一工具清单（board / memory / agent 三组）
   approvalManager.js                        提案审批队列
+  approvalService.js                        记忆提案和 Board 提案的统一审批入口
+  boardChangePlanner.js                     Board 变更操作（受控枚举，复用 progressCore）
+  boardDiff.js                              变更 diff 和中文摘要
+  boardChangeStore.js                       提案暂存、备份快照和保留策略
+  boardChangeExecutor.js                    审批通过后的落盘执行器和版本校验
   agentAuditStore.js                        审计写入适配器
 ```
 
@@ -142,6 +150,17 @@ Renderer 或模型请求工具
   -> 执行并限制输出大小、超时和取消
   -> Audit Store
 ```
+
+工具风险等级统一为三档，`toolRuntime` 按等级决定是否放行：
+
+| risk | 含义 | 执行期审批 |
+| --- | --- | --- |
+| `read` | 只读，无副作用 | 不需要 |
+| `propose` | 只写暂存区，不碰线上用户数据 | 不需要（用户在对提案的审批环节确认） |
+| `write` | 直接改动线上用户数据 | 必须配置 approval handler，否则一律拒绝 |
+
+审计写入失败不会影响工具结果：`toolRuntime` 会吞掉 audit sink 的异常并记日志。
+超时通过 `AbortController` 真正中断等待，而不是仅仅标记状态。
 
 ## 4. 记忆系统分层
 
@@ -270,25 +289,32 @@ flowchart LR
     VALID --> POLICY[Account Scope + Capability Policy]
     POLICY --> RISK{Risk}
     RISK -->|read| EXEC[Executor]
-    RISK -->|propose/write| GATE[Approval Manager]
+    RISK -->|propose| EXEC
+    RISK -->|write| GATE[Approval Handler]
     GATE -->|approved| EXEC
-    GATE -->|rejected| DENY[Rejected Result]
+    GATE -->|rejected or missing| DENY[Rejected Result]
     EXEC --> LIMIT[Timeout + Output Limit]
     LIMIT --> AUDIT[Audit Store]
     AUDIT --> RESULT[Structured Result]
 ```
 
-只读工具：
+内置工具集中在 `electron/agent/tools/`，按 `board / memory / agent` 分组，由 `builtInTools.js` 统一注册。
+新增工具使用 `defineTool` 声明，注册时就会校验 id 命名、risk、scopes、title 和 input schema，重复 id 或非法定义会直接失败。
 
 ```js
-registry.register({
+import { defineTool } from "./defineTool.js";
+
+export const boardTools = [defineTool({
   id: "board.search",
+  title: "Search board",
+  description: "Search the user's board for task lines and nodes matching a keyword.",
+  category: "board",
   version: "1.0.0",
   risk: "read",
   scopes: ["board:read"],
-  inputSchema: { type: "object", required: ["query"] },
+  inputSchema: { type: "object", additionalProperties: false, required: ["query"], properties: { query: { type: "string", minLength: 1, maxLength: 200 } } },
   execute: async (input, context) => {},
-});
+})];
 ```
 
 开发要求：
@@ -299,8 +325,32 @@ registry.register({
 - 写入 Board 或敏感记忆时返回 proposal，不直接执行。
 - 高风险工具必须经过 Approval Manager。
 - 结果要限制大小，支持超时和取消，并产生 audit event。
+- `risk: "write"` 的工具必须显式配置 approval handler，否则 Runtime 默认拒绝执行。
 
 提案工具不能直接调用 `boardStorage.writeBoard`。审批后的实际写入应另设明确的执行器，并在执行前重新检查当前账号和 Board 版本。
+
+### 6.2 Board 变更的备份、diff 和确认流程
+
+`board.propose_change` 是唯一面向模型的 Board 写入口，风险等级为 `propose`：它只写暂存区，不碰线上 `stepview-board.json`。
+
+```mermaid
+flowchart LR
+    AGENT[Agent 调用 board.propose_change] --> PLAN[boardChangePlanner 受控操作]
+    PLAN --> SNAPSHOT[boardChangeStore.stage 写入 before/after 备份]
+    SNAPSHOT --> DIFF[boardDiff 生成中文 diff]
+    DIFF --> REVIEW[前端展示待确认卡片]
+    REVIEW -->|保留| COMMIT[boardChangeExecutor.commit]
+    REVIEW -->|丢弃| DISCARD[boardChangeExecutor.discard]
+    COMMIT --> HASH{baseHash 与当前 Board 一致?}
+    HASH -->|否| CONFLICT[BOARD_CHANGE_CONFLICT，要求重新生成]
+    HASH -->|是| WRITE[snapshotBoard + boardStorage.writeBoard]
+```
+
+- 支持的操作是受控枚举（`task.*` / `node.*` / `sticker.*`），全部复用 `src/progressCore.js` 的既有函数，保证 Agent 写入与 UI 写入的结构完全一致。
+- 提案文件位于 `<账号目录>/proposals/<proposalId>.json`，内含原始 Board 备份、候选 Board、`baseHash` 和 diff；用户决定后立即清理，避免堆积。
+- 审批通过时 `boardChangeExecutor` 会重新读取当前 Board 并比对 `baseHash`。不一致说明期间有别的写入，直接拒绝，不会覆盖用户的新数据。
+- 落盘前会在 `<账号目录>/history/` 留一份带时间戳的快照，`boardStorage` 自身在每次写入前也会滚动更新 `stepview-board.backup.json`。
+- 待确认提案存在磁盘上，重启后依然会出现在审批列表里，不会因为进程退出而丢失或多写。
 
 ## 7. 数据隔离和目录约定
 
@@ -313,6 +363,8 @@ flowchart TD
     DIR --> SESSION[stepview-agent.sqlite]
     DIR --> MEMORY[agent-memory.sqlite]
     DIR --> PROFILE[user-profile.sqlite]
+    DIR --> PROPOSALS[proposals 待确认的 Board 变更]
+    DIR --> HISTORY[history 落盘前的 Board 快照]
     DIR --> KBS[knowledge-bases]
     KBS --> KB1[astrology / career / custom]
     MEMORY -. cannot cross .-> OTHER[other account directory]
@@ -346,6 +398,6 @@ Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 G
 
 新增外部记忆后端：`Provider -> Plugin Manager -> Orchestrator`，不要修改 `agentService` 的核心流程。
 
-新增工具：`Manifest -> Registry -> Runtime -> Approval（如需） -> IPC/UI`。
+新增工具：`defineTool（tools/<domain>Tools.js） -> Registry -> Runtime -> Approval（如需） -> IPC/UI`。
 
 新增领域工作区：创建独立 knowledge base、schema、source/ingestion policy 和 domain tools，不要把领域知识混入通用用户记忆表。

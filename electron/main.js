@@ -6,6 +6,8 @@ import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
 import { createGateway } from "./gateway/createGateway.js";
 import { streamOpenAIChat } from "./openAiStream.js";
+import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
+import { completeChatWithTools } from "./agentChatCompletion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -16,11 +18,6 @@ const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5.1";
-
-function getChatCompletionsUrl(baseUrl) {
-  const normalized = String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, "");
-  return `${normalized}/chat/completions`;
-}
 
 function toRendererTurn(turn) {
   return {
@@ -75,26 +72,17 @@ async function askOpenAIWithMessages({
   model,
   baseUrl,
   messages,
+  tools,
+  runTool,
 }) {
-  const normalizedApiKey = String(apiKey || "").trim();
-  if (!normalizedApiKey) throw new Error("Missing OpenAI API key.");
-  const selectedModel = String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL;
-  const selectedBaseUrl = String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim() || DEFAULT_OPENAI_BASE_URL;
-
-  const response = await fetch(getChatCompletionsUrl(selectedBaseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${normalizedApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model: selectedModel, messages }),
+  return completeChatWithTools({
+    apiKey,
+    model: String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL,
+    baseUrl: String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim() || DEFAULT_OPENAI_BASE_URL,
+    messages,
+    tools,
+    runTool,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `OpenAI request failed with ${response.status}.`);
-  }
-  const text = payload.choices?.[0]?.message?.content?.trim();
-  return { text: text || "OpenAI returned an empty response.", model: selectedModel };
 }
 
 if (!gotSingleInstanceLock) {
@@ -163,21 +151,21 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:tools:run", async (_event, request = {}) => {
     const context = gateway.getContext();
     const sessionId = request.sessionId || null;
-    const result = await context.toolRuntime.run(request.toolId, request.input || {}, {
-      accountId: context.accountId,
-      agentId: "user",
-      workspaceId: request.workspaceId || null,
-      sessionId,
-      boardStorage: context.boardStorage,
-      memoryRepository: context.memoryRepository,
-      audit: (event) => sessionId && context.agentSqliteStore.recordSignal?.({ sessionId, kind: "tool_run", payload: event }),
-    });
-    if (result.result?.type?.endsWith?.("_proposal")) return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
-    if (result.result?.type === "memory_upsert" || result.result?.type === "board_change") return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    const result = await context.toolRuntime.run(request.toolId, request.input || {}, createToolContext(context, sessionId, { workspaceId: request.workspaceId || null }));
+    if (result.result?.type === "board_change") return result;
+    if (result.result?.type?.endsWith?.("_proposal") || result.result?.type === "memory_upsert") {
+      return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    }
     return result;
   });
-  ipcMain.handle("agent:approvals:list", () => { const context = gateway.getContext(); return context.approvalManager.list(context.accountId); });
-  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => { const context = gateway.getContext(); const entry = context.approvalManager.decide(request.approvalId, context.accountId, request.decision); if (entry.status === "approved" && entry.proposal.type === "memory_upsert") entry.appliedMemory = context.memoryRepository.upsert(entry.proposal.memory); return entry; });
+  ipcMain.handle("agent:approvals:list", () => {
+    const context = gateway.getContext();
+    return context.approvalService.list(context.accountId);
+  });
+  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => {
+    const context = gateway.getContext();
+    return context.approvalService.decide(request.approvalId, context.accountId, request.decision);
+  });
   ipcMain.handle("agent:memory:list", (_event, options = {}) => gateway.getContext().memoryRepository.list(options));
   ipcMain.handle("agent:memory:feedback", (_event, request = {}) => gateway.getContext().memoryRepository.feedback(request.memoryId, request.action, { nextValue: request.nextValue, reason: request.reason }));
   ipcMain.handle("agent:memory:evidence", (_event, request = {}) => gateway.getContext().memoryRepository.listEvidence(request.memoryId));
@@ -205,6 +193,8 @@ app.whenReady().then(async () => {
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
+        tools: openAiToolSchemas(activeContext.toolRegistry),
+        runTool: createToolRunner(activeContext, sessionId),
       });
       if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");
       const view = await activeContext.agentService.completeChat(prepared, {
@@ -248,6 +238,8 @@ app.whenReady().then(async () => {
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
+        tools: openAiToolSchemas(activeContext.toolRegistry),
+        runTool: createToolRunner(activeContext, sessionId),
         onDelta: (delta) => event.sender.send("agent:chat-stream:event", { streamId: request.streamId, type: "delta", delta }),
       });
       if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");

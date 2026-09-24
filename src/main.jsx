@@ -190,6 +190,8 @@ function App() {
   const [agentQuestion, setAgentQuestion] = React.useState("");
   const [agentJournal, setAgentJournal] = React.useState(EMPTY_AGENT_JOURNAL);
   const [agentLoading, setAgentLoading] = React.useState(false);
+  const [agentApprovals, setAgentApprovals] = React.useState([]);
+  const [approvalBusyId, setApprovalBusyId] = React.useState(null);
   const [streamingTurn, setStreamingTurn] = React.useState(null);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
@@ -498,6 +500,19 @@ function App() {
     window.setTimeout(() => setToast(null), 1700);
   };
 
+  const refreshAgentApprovals = React.useCallback(async () => {
+    if (!desktopApi?.listAgentApprovals) return;
+    try {
+      setAgentApprovals((await desktopApi.listAgentApprovals()) || []);
+    } catch (error) {
+      console.error("Failed to load pending agent changes", error);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (agentDrawerOpen) refreshAgentApprovals();
+  }, [agentDrawerOpen, refreshAgentApprovals]);
+
   const askAgent = async (event) => {
     event.preventDefault();
     const submittedQuestion = agentQuestion.trim();
@@ -568,6 +583,26 @@ function App() {
     } finally {
       setStreamingTurn(null);
       setAgentLoading(false);
+      refreshAgentApprovals();
+    }
+  };
+
+  const decideAgentApproval = async (approval, decision) => {
+    if (!desktopApi?.decideAgentApproval || approvalBusyId) return;
+    setApprovalBusyId(approval.approvalId);
+    try {
+      await desktopApi.decideAgentApproval({ approvalId: approval.approvalId, decision });
+      if (decision === "approved" && approval.type === "board_change") {
+        const saved = withFreshAgentMemory(await desktopApi.loadBoard());
+        setBoard(saved);
+      }
+      showToast(decision === "approved" ? `已保留：${approval.summary}` : `已丢弃：${approval.summary}`);
+    } catch (error) {
+      console.error("Failed to decide agent change", error);
+      showToast(`操作失败：${error.message}`);
+    } finally {
+      setApprovalBusyId(null);
+      await refreshAgentApprovals();
     }
   };
 
@@ -1203,6 +1238,34 @@ function App() {
                 ))}
               </select>
             </label>
+            {agentApprovals.length > 0 && (
+              <section className="agentApprovals" aria-label="待确认的 Agent 修改">
+                <header>
+                  <strong>待确认的修改</strong>
+                  <small>{agentApprovals.length} 项 · 确认前不会改动你的看板</small>
+                </header>
+                {agentApprovals.map((approval) => (
+                  <article key={approval.approvalId} className="agentApprovalCard">
+                    <div className="agentApprovalTitle">
+                      <strong>{approval.summary || approval.type}</strong>
+                      {approval.reason ? <small>理由：{approval.reason}</small> : null}
+                    </div>
+                    {approval.diff?.lines?.length ? (
+                      <ul className="agentApprovalDiff">
+                        {approval.diff.lines.map((line, index) => <li key={index}>{line}</li>)}
+                      </ul>
+                    ) : null}
+                    {approval.type === "board_change" ? (
+                      <p className="agentApprovalNote">原文件已自动备份，确认前不会写入。</p>
+                    ) : null}
+                    <div className="agentApprovalActions">
+                      <button type="button" className="primary" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "approved")}>保留</button>
+                      <button type="button" className="ghost" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "rejected")}>丢弃</button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
             <div className="agentConversation">
               <header>
                 <strong>{agentSessionLabel}</strong>

@@ -56,6 +56,9 @@ export function createLocalGateway({
       const { createToolRuntime } = await import("../agent/toolRuntime.js");
       const { registerBuiltInTools } = await import("../agent/builtInTools.js");
       const { createApprovalManager } = await import("../agent/approvalManager.js");
+      const { createBoardChangeStore } = await import("../agent/boardChangeStore.js");
+      const { createBoardChangeExecutor } = await import("../agent/boardChangeExecutor.js");
+      const { createApprovalService } = await import("../agent/approvalService.js");
       const boardStorage = createBoardStorage({ dataDir });
       const agentSqliteStore = createAgentSqliteStore({ dataDir });
       const redisCache = createRedisAgentCache();
@@ -70,8 +73,11 @@ export function createLocalGateway({
       registerBuiltInTools({ registry: toolRegistry });
       const toolRuntime = createToolRuntime({ registry: toolRegistry });
       const approvalManager = createApprovalManager();
+      const boardChangeStore = createBoardChangeStore({ dataDir });
+      const boardChangeExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
+      const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository });
       const agentService = createAgentService({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: policyExtractor, contextOrchestrator });
-      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, memoryRepository, memoryPlugins, contextOrchestrator, toolRegistry, toolRuntime, approvalManager, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); await memoryPlugins.close(); memoryRepository.close(); } };
+      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, memoryRepository, memoryPlugins, contextOrchestrator, toolRegistry, toolRuntime, approvalManager, boardChangeStore, boardChangeExecutor, approvalService, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); await memoryPlugins.close(); memoryRepository.close(); } };
     }
     initialized = true;
     return context;

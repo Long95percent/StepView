@@ -47,6 +47,8 @@ export function createBrowserGatewayApi() {
     saveSettings: (settings) => request("/settings", { method: "PUT", body: settings }),
     saveBoard: (board) => request("/board", { method: "PUT", body: board }),
     loadAgentJournal: () => request("/agent/journal"),
+    listAgentApprovals: () => request("/agent/approvals"),
+    decideAgentApproval: (input) => request("/agent/approvals/decide", { method: "POST", body: input }),
     chatAgent: (input) => request("/agent/chat", { method: "POST", body: input }),
     async chatAgentStream(input, onDelta) {
       const response = await fetch(`${apiBaseUrl()}/agent/chat/stream`, {

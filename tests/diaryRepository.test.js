@@ -119,6 +119,27 @@ describe("diary repository", () => {
     expect(diary.search({ query: "没有关联" })[0].links).toEqual([]);
   });
 
+  it("lists only this account's tags, and only the ones still in use", () => {
+    const other = createDiaryRepository({ connection: database, accountId: "account-b" });
+    const mine = diary.create(entry({ content: "有标签的日记", tags: ["周记"] }));
+    other.create(entry({ content: "别人的日记", tags: ["别人的标签"] }));
+
+    // 标签不能串账号：两个仓储共用同一个库文件，正是这一点最容易漏。
+    expect(diary.listTags()).toEqual([{ name: "周记", count: 1 }]);
+    expect(other.listTags()).toEqual([{ name: "别人的标签", count: 1 }]);
+
+    // 回收站里的不计入数量：点开标签看到的是 active 的那几条。
+    diary.setStatus(mine.diaryId, "trashed");
+    expect(diary.listTags()).toEqual([]);
+    diary.setStatus(mine.diaryId, "active");
+
+    // 彻底删掉之后，标签行还在库里（下次能复用），但不该再出现在筛选下拉里。
+    expect(diary.listTags()).toEqual([{ name: "周记", count: 1 }]);
+    diary.remove(mine.diaryId);
+    expect(diary.listTags()).toEqual([]);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_tags WHERE name = '周记'").get().count).toBe(1);
+  });
+
   it("moves entries to the trash, restores them, and deletes them for good", () => {
     const created = diary.create(entry({ content: "先写点什么" }));
 

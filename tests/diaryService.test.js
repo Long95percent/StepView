@@ -227,6 +227,21 @@ describe("diary service", () => {
     expect(scoped.get(created.diaryId).links[0].orphanedAt).toBe(NOW.toISOString());
   });
 
+  it("marks links to the nodes the board just lost, and only those", () => {
+    const repository = createDiaryRepository({ connection: database, accountId: "account-a" });
+    const scoped = createDiaryService({ repository, accountId: "account-a", now: () => NOW });
+    const onDropped = scoped.create({ content: "挂在要被删掉的节点上", links: [{ targetType: "node", targetId: "node-drop" }] });
+    const onKept = scoped.create({ content: "挂在留下来的节点上", links: [{ targetType: "node", targetId: "node-keep" }] });
+
+    expect(scoped.markNodesOrphaned(["node-drop", "", null])).toBe(1);
+
+    expect(scoped.get(onDropped.diaryId).links[0].orphanedAt).toBe(NOW.toISOString());
+    expect(scoped.get(onKept.diaryId).links[0].orphanedAt).toBe(null);
+    // 只有关联被标记，日记本身不动（连 rev 都不动）。
+    expect(scoped.get(onDropped.diaryId)).toMatchObject({ content: "挂在要被删掉的节点上", rev: onDropped.rev });
+    expect(scoped.markNodesOrphaned(["node-drop"])).toBe(0);
+  });
+
   it("keeps accounts isolated", () => {
     const created = service.create({ content: "只属于 account-a" });
     const other = createDiaryService({

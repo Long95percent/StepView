@@ -125,11 +125,13 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   const deleteEntryTagsStatement = db.prepare("DELETE FROM diary_entry_tags WHERE diary_id = ?");
   const insertEntryTagStatement = db.prepare("INSERT OR IGNORE INTO diary_entry_tags (diary_id, tag_id) VALUES (?, ?)");
   const listTagsStatement = db.prepare(`
-    SELECT t.name AS name, COUNT(et.diary_id) AS count
+    SELECT t.name AS name, COUNT(e.id) AS count
     FROM diary_tags t
     LEFT JOIN diary_entry_tags et ON et.tag_id = t.id
-    LEFT JOIN diary_entries e ON e.id = et.diary_id AND e.status != 'trashed'
+    LEFT JOIN diary_entries e ON e.id = et.diary_id AND e.account_id = ? AND e.status != 'trashed'
+    WHERE t.account_id = ?
     GROUP BY t.id, t.name
+    HAVING COUNT(e.id) > 0
     ORDER BY t.name ASC
   `);
 
@@ -568,8 +570,19 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     return Number(orphanLinksStatement.run(now.toISOString(), accountId, String(targetType), String(targetId)).changes || 0);
   }
 
+  /**
+   * 标签筛选列表。
+   *
+   * 三个坑都在这一条 SQL 里：
+   *   - 必须按账号过滤。上层每个账号一个库文件，但仓储到处都带 accountId，
+   *     这里漏掉就成了一处静默的越界读取（别的账号的标签会出现在下拉里）。
+   *   - 计数要数 `e.id` 而不是 `et.diary_id`：条目丢进回收站后 `e` 会是 NULL，
+   *     数 et 连回收站里的都算进去，下拉里的数字就比点开看到的多。
+   *   - 一条日记都不剩的标签不再返回（HAVING）。标签行本身留着，
+   *     用户下次写回同一个标签时能直接复用，但没必要让他看到一个"（0）"。
+   */
   function listTags() {
-    return listTagsStatement.all().map((row) => ({ name: row.name, count: Number(row.count || 0) }));
+    return listTagsStatement.all(accountId, accountId).map((row) => ({ name: row.name, count: Number(row.count || 0) }));
   }
 
   function listRevisions(diaryId, { limit = 20 } = {}) {

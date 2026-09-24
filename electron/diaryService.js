@@ -214,6 +214,22 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     return repository.listRevisions(diaryId, options);
   }
 
+  /**
+   * 画布上的节点被删掉时调用：**不删**日记，也不删关联，只把关联标成"原节点已删除"。
+   *
+   * 日记是用户写下来的东西，不能因为他在画布上整理结构就跟着消失；
+   * 界面靠这个标记提示"原节点已删除"，而不是假装关联还在。
+   * 删除路径统一走 boardStorage 的写入口，所以删节点、删任务、清空看板都会走到这里。
+   */
+  function markNodesOrphaned(nodeIds = [], { now: nowValue = now() } = {}) {
+    let changed = 0;
+    for (const nodeId of nodeIds) {
+      if (!nodeId) continue;
+      changed += repository.markLinksOrphaned({ targetType: "node", targetId: String(nodeId), now: nowValue });
+    }
+    return changed;
+  }
+
   function trash(diaryId) {
     requireEntry(diaryId, repository.get(diaryId));
     return requireEntry(diaryId, repository.setStatus(diaryId, "trashed", { now: now() }));
@@ -321,6 +337,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     listNodeEntries,
     listDailyDaysForNode,
     listRevisions,
+    markNodesOrphaned,
     trash,
     restore,
     remove,

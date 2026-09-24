@@ -17,7 +17,7 @@ const KIND_FILTERS = [
  *
  * 同一天有多条时并列展示，不合并：一天写几条是正常用法，合并会让人以为日记被吞了。
  */
-export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
+export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode, focusDay = null, onClearFocusDay }) {
   const [listMode, setListMode] = React.useState("day");
   const [kind, setKind] = React.useState("daily");
   const [queryInput, setQueryInput] = React.useState("");
@@ -46,21 +46,22 @@ export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
     try {
       const status = trashOpen ? "trashed" : "active";
       const kindFilter = kind === "all" ? undefined : kind;
-      const filter = { status, kind: kindFilter, tag: tag || undefined, limit: 200 };
+      // focusDay 是"只看这一天"：从节点上的日期按钮跳过来时用，范围由服务端按 occurred_day 收。
+      const filter = { status, kind: kindFilter, tag: tag || undefined, limit: 200, from: focusDay ?? undefined, to: focusDay ?? undefined };
       const [list, tagList] = await Promise.all([
         query.trim() ? api.search({ ...filter, query: query.trim() }) : api.list(filter),
         api.listTags(),
       ]);
       setEntries(list);
       setTags(tagList);
-      if (listMode === "timeline") setTimeline(await api.timeline({ status, kind: kindFilter }));
+      if (listMode === "timeline") setTimeline(await api.timeline({ status, kind: kindFilter, from: focusDay ?? undefined, to: focusDay ?? undefined }));
     } catch (error) {
       setEntries([]);
       toastRef.current?.(`日记加载失败：${error.message}`);
     } finally {
       setLoading(false);
     }
-  }, [api, kind, listMode, query, tag, trashOpen]);
+  }, [api, kind, listMode, query, tag, trashOpen, focusDay]);
 
   React.useEffect(() => {
     load();
@@ -137,7 +138,9 @@ export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
           <footer>
             {entry.tags.map((name) => <span key={name} className="diaryTag">{name}</span>)}
             {(entry.links ?? []).filter((link) => link.targetType === "node").map((link) => {
-              const label = `${labels.get(link.targetId) || link.targetId}${link.orphanedAt ? "（原节点已删除）" : ""}`;
+              const name = labels.get(link.targetId);
+              // 节点被删掉后就只剩一个 id 了，那是给机器看的，别摆给用户看。
+              const label = link.orphanedAt ? (name ? `${name}（原节点已删除）` : "原节点已删除") : (name || link.targetId);
               // 原节点已经删掉了，点了也跳不到任何地方，那就不要做成按钮。
               if (link.orphanedAt || !onOpenNode) {
                 return <span key={link.linkId} className="diaryNodeTag" title={link.orphanedAt ? "原节点已删除" : undefined}>📍 {label}</span>;
@@ -172,6 +175,11 @@ export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
       <header className="diaryToolbar">
         <div className="diaryToolbarRow">
           <h1>📔 日记</h1>
+          {focusDay && (
+            <button type="button" className="diaryFocusDay" onClick={onClearFocusDay} title="取消只看这一天">
+              📅 只看 {formatDayHeading(focusDay, { now })} ✕
+            </button>
+          )}
           <div className="diarySegmented" role="group" aria-label="日记类型">
             {KIND_FILTERS.map((option) => (
               <button key={option.id} type="button" className={kind === option.id ? "active" : ""} onClick={() => setKind(option.id)}>{option.label}</button>
@@ -206,8 +214,8 @@ export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
 
         {!loading && listMode === "day" && groups.length === 0 && (
           <div className="diaryEmpty">
-            <p>{trashOpen ? "回收站是空的。" : query ? "没有搜到符合条件的日记。" : "还没有日记。"}</p>
-            {!trashOpen && !query && <button type="button" className="primary" onClick={openCreate}>写今天 ✍️</button>}
+            <p>{trashOpen ? "回收站是空的。" : query ? "没有搜到符合条件的日记。" : focusDay ? "这一天还没有日记。" : "还没有日记。"}</p>
+            {!trashOpen && !query && !focusDay && <button type="button" className="primary" onClick={openCreate}>写今天 ✍️</button>}
           </div>
         )}
 
@@ -240,6 +248,9 @@ export function DiariesView({ api, nodeOptions = [], onToast, onOpenNode }) {
 
       {editor && (
         <DiaryEditor
+          // key 里带上 rev：版本冲突后"重新载入"会把新的 entry 交回来，而 useState 的初始值只在挂载时算一次。
+          // 不给 key 的话表单会一直显示旧内容，用户接着一保存就把刚拉回来的新版覆盖掉了——正是这一版要防的事。
+          key={`${editor.entry?.diaryId ?? "new"}:${editor.entry?.rev ?? 0}`}
           entry={editor.entry}
           kind={editor.kind}
           nodeOptions={nodeOptions}

@@ -44,8 +44,10 @@ import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
 import { getBrowserAccountStore } from "./browserAccountStore";
 import { createDiaryApi } from "./diary/diaryApi";
+import { DayDiaryPopover } from "./diary/dayDiaryPopover";
 import { DiariesView } from "./diary/diariesView";
 import { collectNodeOptions } from "./diary/diaryViewCore";
+import { NodeDiarySection } from "./diary/nodeDiarySection";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -143,7 +145,7 @@ function screenToWorld(event, viewport, canvasElement) {
 }
 
 function isCanvasPanTarget(target) {
-  return target instanceof Element && !target.closest(".node, .sticker, .contextMenu, .modalBackdrop, .galleryBackdrop, .linkHandle, .crossTaskEdgeHit");
+  return target instanceof Element && !target.closest(".node, .sticker, .contextMenu, .modalBackdrop, .galleryBackdrop, .linkHandle, .crossTaskEdgeHit, .diaryPopover, .diaryBackdrop");
 }
 
 function App() {
@@ -161,6 +163,13 @@ function App() {
   const [toast, setToast] = React.useState(null);
   // 右侧主列显示什么。日记是独立板块，所以在这一列里切换，而不是再开一个窗口。
   const [mainView, setMainView] = React.useState("canvas");
+  // 从节点上的日期按钮点出来的当日弹层：{ nodeId, day, anchor }。
+  // 它渲染在 shell 层、用屏幕坐标（N2）——节点在带 transform 的画布世界里，塞进节点卡片会跟着缩放。
+  const [dayPopover, setDayPopover] = React.useState(null);
+  // 从弹层"在日记板块中打开"时，让日记板块只看那一天。
+  const [diaryFocusDay, setDiaryFocusDay] = React.useState(null);
+  // 节点里的日记区和弹层都要在对方改动数据后刷新，靠这个计数器互相通知。
+  const [diaryRevision, setDiaryRevision] = React.useState(0);
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -191,6 +200,7 @@ function App() {
   const diaryApi = React.useMemo(() => createAppDiaryApi(), []);
   // 喂给编辑器里的节点多选，以及日记列表里的"关联到哪个节点"小标签。
   const diaryNodeOptions = React.useMemo(() => collectNodeOptions(board), [board]);
+  const bumpDiary = React.useCallback(() => setDiaryRevision((current) => current + 1), []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -636,6 +646,11 @@ function App() {
   React.useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
+        // 弹层开着时，Esc 先关它：这是用户当下唯一在看的东西。
+        if (dayPopover) {
+          setDayPopover(null);
+          return;
+        }
         cancelLinkDrag();
         setBranchLinkDrag(null);
         setSelectedLinkId(null);
@@ -645,7 +660,8 @@ function App() {
       // 在输入框里按 Backspace / Delete 是在改文字，不是在删节点或连线。
       const target = event.target;
       const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
-      const deleting = (event.key === "Delete" || event.key === "Backspace") && !typing;
+      // 画布没在屏幕上、或者弹层开着的时候，这两个键都不该去删画布上的东西（N3）。
+      const deleting = (event.key === "Delete" || event.key === "Backspace") && !typing && !dayPopover && mainView === "canvas";
       if (deleting && selectedLinkId) {
         updateBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
         setSelectedLinkId(null);
@@ -657,7 +673,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [linkDrag, selectedLinkId, selectedBranchId, updateBoard]);
+  }, [linkDrag, selectedLinkId, selectedBranchId, updateBoard, dayPopover, mainView]);
 
   React.useEffect(() => {
     if (!linkDrag && !branchLinkDrag) return undefined;
@@ -803,7 +819,16 @@ function App() {
         {/* 主列显示什么。用 div 不用 section：`.sidebar > section:first-of-type` 会吃到 margin-top: auto。 */}
         <div className="mainViewSwitch" role="group" aria-label="主视图">
           <button type="button" className={mainView === "canvas" ? "active" : ""} onClick={() => setMainView("canvas")}>🎨 画布</button>
-          <button type="button" className={mainView === "diary" ? "active" : ""} onClick={() => setMainView("diary")} disabled={!diaryApi} title={diaryApi ? undefined : "当前运行模式没有提供日记通道"}>📔 日记</button>
+          <button
+            type="button"
+            className={mainView === "diary" ? "active" : ""}
+            // 从侧栏进来就是"打开日记板块"，不带上次从弹层带过来的那一天。
+            onClick={() => { setDiaryFocusDay(null); setDayPopover(null); setMainView("diary"); }}
+            disabled={!diaryApi}
+            title={diaryApi ? undefined : "当前运行模式没有提供日记通道"}
+          >
+            📔 日记
+          </button>
         </div>
 
         {gatewayInfo?.mode === "family" && gatewayInfo.account && (
@@ -919,7 +944,14 @@ function App() {
       </aside>
 
       {mainView === "diary" && diaryApi ? (
-        <DiariesView api={diaryApi} nodeOptions={diaryNodeOptions} onToast={showToast} onOpenNode={openNodeFromDiary} />
+        <DiariesView
+          api={diaryApi}
+          nodeOptions={diaryNodeOptions}
+          onToast={showToast}
+          onOpenNode={openNodeFromDiary}
+          focusDay={diaryFocusDay}
+          onClearFocusDay={() => setDiaryFocusDay(null)}
+        />
       ) : (
       <section
         ref={canvasRef}
@@ -1045,6 +1077,18 @@ function App() {
                   <strong className="nodeTitle">{node.isKeyNode && <span className="keyBadge">★</span>}{node.title}</strong>
                   <time>{formatCompactDate(node.timestamp)}</time>
                   {selectedNodeId === node.id && <p>{node.detail || "No details yet."}</p>}
+                  {selectedNodeId === node.id && diaryApi && (
+                    <NodeDiarySection
+                      api={diaryApi}
+                      nodeId={node.id}
+                      nodeLabel={task.title ? `${task.title} · ${node.title}` : node.title}
+                      nodeOptions={diaryNodeOptions}
+                      revision={diaryRevision}
+                      onToast={showToast}
+                      onChanged={bumpDiary}
+                      onOpenDay={(day, anchor) => setDayPopover({ nodeId: node.id, day, anchor })}
+                    />
+                  )}
                   {selectedNodeId === node.id && node.kind === "finish" && (
                     <div className="nodeActions">
                       <button className="done" onClick={(event) => { event.stopPropagation(); finishTask(task, node); }}>
@@ -1149,6 +1193,23 @@ function App() {
 
       {/* 提示挂在 shell 层：画布和日记两个视图都要能看到它。position: fixed 不参与 .shell 的网格布局。 */}
       {toast && <div className="toast">{toast}</div>}
+
+      {/* 当日弹层也挂在 shell 层、用屏幕坐标（N2）：放进带 transform 的画布世界会被缩放甚至被裁掉。 */}
+      {dayPopover && diaryApi && (
+        <DayDiaryPopover
+          api={diaryApi}
+          nodeId={dayPopover.nodeId}
+          nodeLabel={diaryNodeOptions.find((option) => option.id === dayPopover.nodeId)?.label}
+          day={dayPopover.day}
+          anchor={dayPopover.anchor}
+          nodeOptions={diaryNodeOptions}
+          revision={diaryRevision}
+          onToast={showToast}
+          onChanged={bumpDiary}
+          onClose={() => setDayPopover(null)}
+          onOpenBoard={(day) => { setDayPopover(null); setDiaryFocusDay(day); setMainView("diary"); }}
+        />
+      )}
 
       {noteDraft && (
         <div className="modalBackdrop" onPointerDown={() => setNoteDraft(null)}>

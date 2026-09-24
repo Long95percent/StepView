@@ -52,6 +52,32 @@ export function groupEntriesByDay(entries = []) {
     });
 }
 
+/** 当日弹层宽度，也是把它夹在窗口里的依据。 */
+const POPOVER_WIDTH = 384;
+const POPOVER_GAP = 10;
+const POPOVER_MARGIN = 12;
+/** 下方留不出这么多空间就翻到日期按钮上方去。 */
+const POPOVER_MIN_SPACE_BELOW = 260;
+
+/**
+ * 把当日弹层摆在被点的日期按钮旁边，并且不让它跑出窗口。
+ *
+ * anchor 来自 `getBoundingClientRect()`，已经是**屏幕坐标**：节点在带 transform 的画布世界里，
+ * 世界坐标会跟着缩放和平移走，拿世界坐标去定位会被缩放两次。
+ */
+export function placePopover(anchor, viewport = { width: 1440, height: 900 }) {
+  const centered = anchor.left + anchor.width / 2 - POPOVER_WIDTH / 2;
+  const left = Math.max(POPOVER_MARGIN, Math.min(centered, viewport.width - POPOVER_WIDTH - POPOVER_MARGIN));
+  const openUp = viewport.height - anchor.bottom < POPOVER_MIN_SPACE_BELOW && anchor.top > POPOVER_MIN_SPACE_BELOW;
+  // 翻到上方用 `bottom` 而不是 `transform`：弹层里还要嵌一个 fixed 的编辑器弹窗，
+  // 而 transform / backdrop-filter 会给固定定位后代创建包含块，编辑器就会被困在弹层这一小块里。
+  // 实测过：加了 transform 之后，编辑器只占弹层那么大，而不是铺满窗口。
+  const maxHeight = Math.max(180, (openUp ? anchor.top : viewport.height - anchor.bottom) - POPOVER_GAP - POPOVER_MARGIN);
+  return openUp
+    ? { left, width: POPOVER_WIDTH, bottom: viewport.height - anchor.top + POPOVER_GAP, maxHeight }
+    : { left, width: POPOVER_WIDTH, top: anchor.bottom + POPOVER_GAP, maxHeight };
+}
+
 /** 某个瞬间在指定时区属于哪一天。 */
 function dayKeyInZone(date, timezone) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
@@ -80,6 +106,21 @@ export function formatDayHeading(day, { now = new Date(), timezone = "UTC" } = {
   const [year, month, date] = day.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, date)).getUTCDay()];
   return `${year}年${month}月${date}日 星期${weekday}`;
+}
+
+/**
+ * 日期按钮上的短标签：今天 / 昨天 / 9月24日 / 2025年9月24日。
+ *
+ * 和组头共用同一套"今天/昨天"判断（免得两处各算一遍、各错一遍），但省掉星期、当年的年份也省掉：
+ * 这是一排紧挨着的芯片，宽度必须稳，写全了会把节点卡片撑开。
+ */
+export function formatDayChip(day, { now = new Date(), timezone = "UTC" } = {}) {
+  if (!isDayKey(day)) return String(day ?? "");
+  const heading = formatDayHeading(day, { now, timezone });
+  if (heading === "今天" || heading === "昨天") return heading;
+  const [year, month, date] = day.split("-").map(Number);
+  const thisYear = Number(dayKeyInZone(now, timezone).slice(0, 4));
+  return year === thisYear ? `${month}月${date}日` : `${year}年${month}月${date}日`;
 }
 
 /** 列表里那一行的时间，只到分钟。 */

@@ -30,6 +30,8 @@ export function DiaryEditor({
   entry = null,
   kind = "daily",
   nodeOptions = [],
+  /** 新建时默认挂上的节点（从某个节点里点"写一条节点日记"时就是它自己）。 */
+  defaultNodeIds = [],
   busy = false,
   conflict = false,
   onCancel,
@@ -40,7 +42,12 @@ export function DiaryEditor({
   const [title, setTitle] = React.useState(entry?.title ?? "");
   const [content, setContent] = React.useState(entry?.content ?? "");
   const [tags, setTags] = React.useState((entry?.tags ?? []).join("、"));
-  const [linkedNodeIds, setLinkedNodeIds] = React.useState(() => new Set((entry?.links ?? []).filter((link) => link.targetType === "node").map((link) => link.targetId)));
+  // 编辑时以这条日记现有的关联为准；新建时才用调用方给的默认节点。
+  const [linkedNodeIds, setLinkedNodeIds] = React.useState(() => new Set(
+    entry
+      ? (entry.links ?? []).filter((link) => link.targetType === "node").map((link) => link.targetId)
+      : defaultNodeIds,
+  ));
   const [error, setError] = React.useState("");
 
   const toggleNode = (nodeId) => {

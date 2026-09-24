@@ -5,6 +5,17 @@ import { createBoardRepository } from "./db/repositories/boardRepository.js";
 
 const EMPTY_BOARD = normalizeBoard(null);
 
+/** 画布上所有节点的 id。用来回答"这次保存之后，哪些节点不见了"。 */
+function collectNodeIds(board) {
+  const ids = new Set();
+  for (const task of board?.tasks ?? []) {
+    for (const node of task?.nodes ?? []) {
+      if (node?.id) ids.add(String(node.id));
+    }
+  }
+  return ids;
+}
+
 /**
  * 画布存储的薄适配器。
  *
@@ -14,7 +25,7 @@ const EMPTY_BOARD = normalizeBoard(null);
  * 对外接口保持不变：readBoard / writeBoard / flushWrites / setFsApi / boardPath / backupPath。
  * fsApi 注入点保留给测试（模拟磁盘写失败），默认走数据库层的默认文件系统。
  */
-export function createBoardStorage({ dataDir, repository = null, fsApi } = {}) {
+export function createBoardStorage({ dataDir, repository = null, fsApi, onNodesRemoved } = {}) {
   if (!dataDir) throw new Error("createBoardStorage requires a dataDir.");
 
   let currentFsApi = fsApi;
@@ -48,10 +59,32 @@ export function createBoardStorage({ dataDir, repository = null, fsApi } = {}) {
 
   async function writeBoardNow(board) {
     const nextBoard = normalizeBoard(board);
+    const previous = ensureRepository().readBoard();
     // 先落库再镜像：库是权威副本，镜像失败也只是文件落后一步，不会丢数据。
     ensureRepository().save(nextBoard);
+    await notifyRemovedNodes(previous, nextBoard);
     await writeBoardExportFile({ dataDir, board: nextBoard, fsApi: currentFsApi });
     return { ok: true, path: boardPath() };
+  }
+
+  /**
+   * 把"这次保存之后从画布上消失的节点"报给上层（日记靠它把关联标成"原节点已删除"）。
+   *
+   * 放在画布保存这一个入口上，覆盖所有删除路径：删节点、删任务、清空看板、Agent 审批通过的改动。
+   * 失败只记日志、绝不抛出：回调是给日记善后的，画布本身已经存好了，不该因为日记出问题而失败。
+   */
+  async function notifyRemovedNodes(previous, next) {
+    if (typeof onNodesRemoved !== "function" || !previous) return;
+    const before = collectNodeIds(previous);
+    if (before.size === 0) return;
+    const after = collectNodeIds(next);
+    const removed = [...before].filter((id) => !after.has(id));
+    if (removed.length === 0) return;
+    try {
+      await onNodesRemoved(removed);
+    } catch (error) {
+      console.error("Failed to mark diary links as orphaned", error);
+    }
   }
 
   function writeBoard(board) {

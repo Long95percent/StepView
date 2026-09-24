@@ -43,11 +43,16 @@ export function createAccountContext({
   const maintenance = createDatabaseMaintenance({ connection: database });
   maintenance.start();
   // 画布和审批、记忆共用同一个账号库连接，避免同一进程里对同一个文件开两个写入连接。
-  const boardStorage = boardStorageFactory({ dataDir, repository: createBoardRepository({ connection: database }) });
-  const agentSqliteStore = agentSessionRepositoryFactory({ connection: database });
-  const memoryRepository = createAgentMemoryRepository({ connection: database, accountId: account.accountId });
+  // 日记先建出来：画布保存时要拿它给"被删掉的节点"打孤儿标记。
   const diaryRepository = createDiaryRepository({ connection: database, accountId: account.accountId });
   const diaryService = createDiaryService({ repository: diaryRepository, accountId: account.accountId });
+  const boardStorage = boardStorageFactory({
+    dataDir,
+    repository: createBoardRepository({ connection: database }),
+    onNodesRemoved: (nodeIds) => diaryService.markNodesOrphaned(nodeIds),
+  });
+  const agentSqliteStore = agentSessionRepositoryFactory({ connection: database });
+  const memoryRepository = createAgentMemoryRepository({ connection: database, accountId: account.accountId });
   const memoryPlugins = createMemoryPluginManager();
   const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
   const memoryWriter = createMemoryWriter({ repository: memoryRepository });

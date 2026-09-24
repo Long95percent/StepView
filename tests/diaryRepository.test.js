@@ -119,6 +119,17 @@ describe("diary repository", () => {
     expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_entry_tags WHERE diary_id = ?").get(created.diaryId).count).toBe(0);
   });
 
+  it("replaces links on update instead of colliding with the unique key", () => {
+    const created = diary.create(entry({ content: "第一版", links: [{ targetType: "node", targetId: "node-1" }] }));
+
+    // 同一条关联再写一次不该报 UNIQUE 冲突；换成别的目标时旧的必须消失。
+    const updated = diary.update(created.diaryId, entry({ content: "第二版", links: [{ targetType: "node", targetId: "node-1" }] }), { expectedRev: created.rev });
+    expect(diary.listLinks(updated.diaryId)).toHaveLength(1);
+
+    diary.update(created.diaryId, entry({ content: "第三版", links: [{ targetType: "task", targetId: "task-1" }] }), { expectedRev: updated.rev });
+    expect(diary.listLinks(created.diaryId).map((link) => link.targetId)).toEqual(["task-1"]);
+  });
+
   it("marks canvas links as orphaned instead of deleting the diary", () => {
     const created = diary.create(entry({ content: "关联了一个节点", links: [{ targetType: "node", targetId: "node-9" }] }));
 

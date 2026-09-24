@@ -144,6 +144,27 @@ app.whenReady().then(async () => {
     await shell.showItemInFolder(exportedPath);
     return exportedPath;
   });
+  ipcMain.handle("diary:list", (_event, options = {}) => gateway.getContext().diaryService.list(options || {}));
+  ipcMain.handle("diary:get", (_event, request = {}) => gateway.getContext().diaryService.get(request.diaryId));
+  ipcMain.handle("diary:create", (_event, input = {}) => gateway.getContext().diaryService.create(input));
+  ipcMain.handle("diary:update", (_event, request = {}) => gateway.getContext().diaryService.update(request.diaryId, request, { expectedRev: request.expectedRev ?? request.rev }));
+  ipcMain.handle("diary:trash", (_event, request = {}) => gateway.getContext().diaryService.trash(request.diaryId));
+  ipcMain.handle("diary:restore", (_event, request = {}) => gateway.getContext().diaryService.restore(request.diaryId));
+  ipcMain.handle("diary:remove", (_event, request = {}) => gateway.getContext().diaryService.remove(request.diaryId));
+  ipcMain.handle("diary:search", (_event, options = {}) => gateway.getContext().diaryService.search(options || {}));
+  ipcMain.handle("diary:timeline", (_event, options = {}) => gateway.getContext().diaryService.timeline(options || {}));
+  ipcMain.handle("diary:tags", () => gateway.getContext().diaryService.listTags());
+  ipcMain.handle("diary:list-revisions", (_event, request = {}) => gateway.getContext().diaryService.listRevisions(request.diaryId, request));
+  ipcMain.handle("diary:preview-node-notes", async () => {
+    const context = gateway.getContext();
+    await context.boardStorage.flushWrites();
+    return context.diaryService.previewNodeNoteImport(await context.boardStorage.readBoard());
+  });
+  ipcMain.handle("diary:import-node-notes", async (_event, input = {}) => {
+    const context = gateway.getContext();
+    await context.boardStorage.flushWrites();
+    return context.diaryService.importNodeNotes(await context.boardStorage.readBoard(), input || {});
+  });
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());
   });

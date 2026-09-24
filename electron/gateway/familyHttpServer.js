@@ -63,6 +63,20 @@ async function askOpenAI({ apiKey, model, baseUrl, messages, tools, runTool, com
   }
 }
 
+function diaryListOptions(url) {
+  const numberOrUndefined = (name) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
+  return {
+    status: url.searchParams.get("status") || undefined,
+    from: url.searchParams.get("from") || undefined,
+    to: url.searchParams.get("to") || undefined,
+    tag: url.searchParams.get("tag") || undefined,
+    targetType: url.searchParams.get("targetType") || undefined,
+    targetId: url.searchParams.get("targetId") || undefined,
+    limit: numberOrUndefined("limit"),
+    offset: numberOrUndefined("offset"),
+  };
+}
+
 export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools, contextCacheFactory = createContextCache } = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
@@ -153,6 +167,53 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
       }
       if (request.method === "GET" && url.pathname === "/api/board") return json(response, 200, await authenticated(request).context.boardStorage.readBoard(), origin);
       if (request.method === "PUT" && url.pathname === "/api/board") return json(response, 200, await authenticated(request).context.boardStorage.writeBoard(await readBody(request)), origin);
+      // 日记：Electron IPC 与这里共用同一个 diaryService，行为与鉴权完全一致。
+      if (request.method === "GET" && url.pathname === "/api/diary") {
+        const { context } = authenticated(request);
+        return json(response, 200, context.diaryService.list(diaryListOptions(url)), origin);
+      }
+      if (request.method === "POST" && url.pathname === "/api/diary") {
+        const { context } = authenticated(request);
+        return json(response, 201, context.diaryService.create(await readBody(request)), origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/diary/search") {
+        const { context } = authenticated(request);
+        const input = diaryListOptions(url);
+        return json(response, 200, context.diaryService.search({ ...input, query: url.searchParams.get("q") || "" }), origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/diary/tags") {
+        const { context } = authenticated(request);
+        return json(response, 200, context.diaryService.listTags(), origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/diary/timeline") {
+        const { context } = authenticated(request);
+        return json(response, 200, context.diaryService.timeline(diaryListOptions(url)), origin);
+      }
+      if (url.pathname === "/api/diary/import-node-notes") {
+        const { context } = authenticated(request);
+        await context.boardStorage.flushWrites();
+        const board = await context.boardStorage.readBoard();
+        if (request.method === "GET") return json(response, 200, context.diaryService.previewNodeNoteImport(board), origin);
+        if (request.method === "POST") return json(response, 200, context.diaryService.importNodeNotes(board, await readBody(request)), origin);
+      }
+      const diaryEntryMatch = /^\/api\/diary\/([^/]+)$/.exec(url.pathname);
+      if (diaryEntryMatch) {
+        const { context } = authenticated(request);
+        const diaryId = decodeURIComponent(diaryEntryMatch[1]);
+        if (request.method === "GET") return json(response, 200, context.diaryService.get(diaryId), origin);
+        if (request.method === "PUT") {
+          const input = await readBody(request);
+          return json(response, 200, context.diaryService.update(diaryId, input, { expectedRev: input?.expectedRev ?? input?.rev }), origin);
+        }
+        if (request.method === "DELETE") {
+          return json(
+            response,
+            200,
+            url.searchParams.get("purge") === "1" ? context.diaryService.remove(diaryId) : context.diaryService.trash(diaryId),
+            origin,
+          );
+        }
+      }
       if (request.method === "GET" && url.pathname === "/api/agent/journal") {
         const { context } = authenticated(request);
         await context.boardStorage.flushWrites();

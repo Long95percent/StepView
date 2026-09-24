@@ -59,6 +59,8 @@ describe("built-in tools", () => {
       "board.get_current_state",
       "board.search",
       "board.propose_change",
+      "diary.recent",
+      "diary.propose_entry",
       "memory.search",
       "memory.get",
       "memory.propose_upsert",

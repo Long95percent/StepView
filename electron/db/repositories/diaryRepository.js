@@ -113,6 +113,18 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     "SELECT * FROM diary_revisions WHERE diary_id = ? AND account_id = ? ORDER BY rev DESC LIMIT ?",
   );
 
+  const selectImportMarkerStatement = db.prepare("SELECT value_json FROM kv WHERE key = ?");
+  const upsertImportMarkerStatement = db.prepare(`
+    INSERT INTO kv (key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `);
+
+  const listImportedNodeIdsStatement = db.prepare(`
+    SELECT DISTINCT l.target_id AS target_id
+    FROM diary_links l JOIN diary_entries e ON e.id = l.diary_id
+    WHERE l.account_id = ? AND l.target_type = 'node' AND e.source = 'node-note-import'
+  `);
+
   const insertFtsStatement = db.prepare("INSERT INTO diary_fts (diary_id, account_id, title, content) VALUES (?, ?, ?, ?)");
   const updateFtsStatement = db.prepare("UPDATE diary_fts SET title = ?, content = ? WHERE diary_id = ?");
   const deleteFtsStatement = db.prepare("DELETE FROM diary_fts WHERE diary_id = ?");
@@ -151,7 +163,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   }
 
   function syncLinks(diaryId, links, nowIso) {
-    deleteLinksStatement.run(diaryId);
+    deleteLinksStatement.run(diaryId, accountId);
     for (const link of links) {
       insertLinkStatement.run(
         makeId("diary-link"),
@@ -434,6 +446,44 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     }));
   }
 
+  /**
+   * 已经由"节点备注导入"生成过日记的节点 id。
+   *
+   * 覆盖所有状态：条目后来被归档、丢进回收站甚至删掉，都算"这个节点已经导过了"，
+   * 免得用户删掉一条导入的日记之后，下次导入又把它变回来。
+   */
+  function importMarkerKey() {
+    return `diary-import:node-notes:${accountId}`;
+  }
+
+  function readImportMarker() {
+    const row = selectImportMarkerStatement.get(importMarkerKey());
+    if (!row) return [];
+    try {
+      const parsed = JSON.parse(row.value_json);
+      return Array.isArray(parsed?.nodeIds) ? parsed.nodeIds.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function listImportedNodeIds() {
+    const fromLinks = listImportedNodeIdsStatement.all(accountId).map((row) => row.target_id);
+    return [...new Set([...readImportMarker(), ...fromLinks])];
+  }
+
+  /**
+   * 记下"这些节点的备注已经导过了"。
+   *
+   * 光靠 diary_links 判断不够：用户把导入出来的日记删掉时，关联会跟着级联消失，
+   * 下次导入又会把这条日记变回来。标记独立存在 kv 里，删除日记不会抹掉它。
+   */
+  function markNodeNotesImported(nodeIds, { now = new Date() } = {}) {
+    const merged = [...new Set([...readImportMarker(), ...nodeIds.map(String)])];
+    upsertImportMarkerStatement.run(importMarkerKey(), JSON.stringify({ nodeIds: merged }), now.toISOString());
+    return merged.length;
+  }
+
   function count({ status = "active" } = {}) {
     const row =
       status === "all"
@@ -456,6 +506,8 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     markLinksOrphaned,
     listTags,
     listRevisions,
+    listImportedNodeIds,
+    markNodeNotesImported,
     count,
   };
 }

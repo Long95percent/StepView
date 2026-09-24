@@ -6,6 +6,8 @@ import { createAgentSessionRepository } from "../db/repositories/agentSessionRep
 import { createBoardStorage } from "../boardStorage.js";
 import { createBoardRepository } from "../db/repositories/boardRepository.js";
 import { createAgentMemoryRepository } from "../db/repositories/agentMemoryRepository.js";
+import { createDiaryRepository } from "../db/repositories/diaryRepository.js";
+import { createDiaryService } from "../diaryService.js";
 import { createMemoryPluginManager } from "../agent/memoryPluginManager.js";
 import { createMemoryExtractor } from "../agent/memoryExtractor.js";
 import { createMemoryWriter } from "../agent/memoryWriter.js";
@@ -44,6 +46,8 @@ export function createAccountContext({
   const boardStorage = boardStorageFactory({ dataDir, repository: createBoardRepository({ connection: database }) });
   const agentSqliteStore = agentSessionRepositoryFactory({ connection: database });
   const memoryRepository = createAgentMemoryRepository({ connection: database, accountId: account.accountId });
+  const diaryRepository = createDiaryRepository({ connection: database, accountId: account.accountId });
+  const diaryService = createDiaryService({ repository: diaryRepository, accountId: account.accountId });
   const memoryPlugins = createMemoryPluginManager();
   const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
   const memoryWriter = createMemoryWriter({ repository: memoryRepository });
@@ -55,7 +59,7 @@ export function createAccountContext({
   const approvalManager = createApprovalManager({ repository: approvalRepository });
   const boardChangeStore = createBoardChangeStore({ connection: database, accountId: account.accountId });
   const boardChangeExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
-  const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository });
+  const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository, diaryService });
   const redisCache = redisCacheFactory({ namespace: `stepview:${account.accountId}:agent` });
   const mem0Client = mem0ClientFactory({ userId: account.accountId });
   const agentService = agentServiceFactory({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: memoryExtractorWithPolicy, contextOrchestrator });
@@ -69,6 +73,8 @@ export function createAccountContext({
     approvalRepository,
     boardStorage,
     agentSqliteStore,
+    diaryRepository,
+    diaryService,
     memoryRepository,
     memoryPlugins,
     memoryExtractor,

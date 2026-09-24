@@ -130,4 +130,124 @@ describe("family HTTP gateway", () => {
     expect(boardAfterApproval.tasks[0].title).toBe("家庭新目标");
     expect(await fetch(`${baseUrl}/agent/approvals`, { headers }).then((response) => response.json())).toHaveLength(0);
   });
+  it("exposes the diary over HTTP with the same isolation as the board", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-diary-"));
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+    const jsonHeaders = { "Content-Type": "application/json" };
+
+    async function register(username) {
+      const response = await fetch(`${baseUrl}/accounts/register`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ username, password: "password-1" }) });
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      return { Authorization: `Bearer ${body.sessionId}`, ...jsonHeaders };
+    }
+
+    const alice = await register("dana");
+    const bob = await register("erin");
+
+    expect((await fetch(`${baseUrl}/diary`)).status).toBe(401);
+    await expect(fetch(`${baseUrl}/diary`, { headers: alice }).then((response) => response.json())).resolves.toEqual([]);
+
+    const created = await fetch(`${baseUrl}/diary`, {
+      method: "POST",
+      headers: alice,
+      body: JSON.stringify({ title: "家庭日记", content: "今天一起做了数据库重构", timezone: "Asia/Shanghai", tags: ["家庭"], links: [{ targetType: "node", targetId: "node-1", role: "primary" }] }),
+    }).then((response) => response.json());
+    expect(created).toMatchObject({ rev: 1, status: "active", title: "家庭日记" });
+
+    expect(await fetch(`${baseUrl}/diary`, { headers: alice }).then((response) => response.json())).toHaveLength(1);
+    expect(await fetch(`${baseUrl}/diary`, { headers: bob }).then((response) => response.json())).toHaveLength(0);
+    expect((await fetch(`${baseUrl}/diary/${created.diaryId}`, { headers: bob })).status).toBe(404);
+
+    const detail = await fetch(`${baseUrl}/diary/${created.diaryId}`, { headers: alice }).then((response) => response.json());
+    expect(detail.links).toHaveLength(1);
+    await expect(fetch(`${baseUrl}/diary/search?q=数据库重构`, { headers: alice }).then((response) => response.json())).resolves.toHaveLength(1);
+    await expect(fetch(`${baseUrl}/diary/tags`, { headers: alice }).then((response) => response.json())).resolves.toEqual([{ name: "家庭", count: 1 }]);
+    await expect(fetch(`${baseUrl}/diary/timeline`, { headers: alice }).then((response) => response.json())).resolves.toHaveLength(1);
+
+    const updated = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "PUT", headers: alice, body: JSON.stringify({ content: "改过的正文", rev: created.rev }) }).then((response) => response.json());
+    expect(updated).toMatchObject({ rev: 2, content: "改过的正文" });
+    const conflict = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "PUT", headers: alice, body: JSON.stringify({ content: "抢写", rev: created.rev }) });
+    expect(conflict.status).toBe(500);
+    expect((await conflict.json()).error).toContain("已经被改过");
+
+    const board = { tasks: [{ id: "task-9", title: "家庭任务", nodes: [{ id: "node-9", title: "备注", detail: "写在节点上的话" }] }] };
+    await fetch(`${baseUrl}/board`, { method: "PUT", headers: alice, body: JSON.stringify(board) });
+    const preview = await fetch(`${baseUrl}/diary/import-node-notes`, { headers: alice }).then((response) => response.json());
+    expect(preview).toEqual([expect.objectContaining({ nodeId: "node-9", alreadyImported: false })]);
+
+    const imported = await fetch(`${baseUrl}/diary/import-node-notes`, { method: "POST", headers: alice, body: JSON.stringify({ confirm: true, timezone: "Asia/Shanghai" }) }).then((response) => response.json());
+    expect(imported).toMatchObject({ confirmed: true, created: 1 });
+    // 导入只读画布：节点标题和备注原文一个字都不动。
+    const boardAfterImport = await fetch(`${baseUrl}/board`, { headers: alice }).then((response) => response.json());
+    expect(boardAfterImport.tasks[0].nodes[0]).toMatchObject({ id: "node-9", title: "备注", detail: "写在节点上的话" });
+    expect(await fetch(`${baseUrl}/diary`, { headers: alice }).then((response) => response.json())).toHaveLength(2);
+    expect(await fetch(`${baseUrl}/diary/import-node-notes`, { method: "POST", headers: alice, body: JSON.stringify({ confirm: true }) }).then((response) => response.json())).toMatchObject({ created: 0, skipped: 1 });
+
+    const trashed = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "DELETE", headers: alice }).then((response) => response.json());
+    expect(trashed).toMatchObject({ status: "trashed" });
+    expect(await fetch(`${baseUrl}/diary`, { headers: alice }).then((response) => response.json())).toHaveLength(1);
+    const purged = await fetch(`${baseUrl}/diary/${created.diaryId}?purge=1`, { method: "DELETE", headers: alice }).then((response) => response.json());
+    expect(purged).toEqual({ ok: true, diaryId: created.diaryId });
+  });
+  it("stages agent diary entries in the shared approval queue", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-diary-approval-"));
+    let proposal = null;
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+      openAiComplete: async ({ runTool }) => {
+        proposal = await runTool("diary.propose_entry", { title: "Agent 写的日记", content: "今天把日记接进了审批队列", reason: "值得留档" });
+        return { text: "已经准备好一条日记。", model: "test-model" };
+      },
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    const registration = await fetch(`${baseUrl}/accounts/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "frank", password: "password-1" }) }).then((response) => response.json());
+    const headers = { Authorization: `Bearer ${registration.sessionId}`, "Content-Type": "application/json" };
+
+    const task = buildTask("日记测试任务", { x: 300, y: 300 });
+    await fetch(`${baseUrl}/board`, { method: "PUT", headers, body: JSON.stringify({ tasks: [task] }) });
+
+    const chat = await fetch(`${baseUrl}/agent/chat`, { method: "POST", headers, body: JSON.stringify({ sessionId: `task:${task.id}`, userText: "帮我记一笔", apiKey: "test-key" }) });
+    expect(chat.status, await chat.text()).toBe(200);
+    expect(proposal).toMatchObject({ type: "diary_change", operation: "diary.create" });
+    expect(await fetch(`${baseUrl}/diary`, { headers }).then((response) => response.json())).toHaveLength(0);
+
+    const pending = await fetch(`${baseUrl}/agent/approvals`, { headers }).then((response) => response.json());
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ type: "diary_change", status: "pending", operation: "diary.create", reason: "值得留档" });
+
+    const decided = await fetch(`${baseUrl}/agent/approvals/decide`, { method: "POST", headers, body: JSON.stringify({ approvalId: pending[0].approvalId, decision: "approved" }) }).then((response) => response.json());
+    expect(decided.approval.status).toBe("approved");
+    await expect(fetch(`${baseUrl}/diary`, { headers }).then((response) => response.json())).resolves.toEqual([
+      expect.objectContaining({ title: "Agent 写的日记", content: "今天把日记接进了审批队列", source: "agent" }),
+    ]);
+  });
 });

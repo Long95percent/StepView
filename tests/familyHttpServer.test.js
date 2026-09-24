@@ -314,4 +314,53 @@ describe("family HTTP gateway", () => {
       expect.objectContaining({ title: "Agent 写的日记", content: "今天把日记接进了审批队列", source: "agent" }),
     ]);
   });
+
+  it("accepts the browser preflight for DELETE so entries can be trashed and purged", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-delete-"));
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    const registration = await fetch(`${baseUrl}/accounts/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "grace", password: "password-1" }) }).then((response) => response.json());
+    const headers = { Authorization: `Bearer ${registration.sessionId}`, "Content-Type": "application/json" };
+
+    // 浏览器的预检只认这张方法表。漏了 DELETE，"删除"会变成 "Failed to fetch"，
+    // 而且请求根本到不了服务端 —— 这种失败在 Node 侧直接发请求是测不出来的。
+    const preflight = await fetch(`${baseUrl}/diary/anything`, {
+      method: "OPTIONS",
+      headers: { Origin: "http://localhost:5173", "Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "authorization,content-type" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-methods")).toContain("DELETE");
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+
+    const created = await fetch(`${baseUrl}/diary`, { method: "POST", headers, body: JSON.stringify({ content: "先删到回收站，再彻底删掉" }) }).then((response) => response.json());
+
+    const trashed = await fetch(`${baseUrl}/diary/${created.diaryId}`, { method: "DELETE", headers });
+    const trashedBody = await trashed.json();
+    expect(trashed.status).toBe(200);
+    expect(trashedBody).toMatchObject({ diaryId: created.diaryId, status: "trashed" });
+    expect(await fetch(`${baseUrl}/diary/${created.diaryId}`, { headers }).then((response) => response.json())).toMatchObject({ status: "trashed" });
+
+    const purged = await fetch(`${baseUrl}/diary/${created.diaryId}?purge=1`, { method: "DELETE", headers });
+    const purgedBody = await purged.json();
+    expect(purged.status).toBe(200);
+    expect(purgedBody).toEqual({ ok: true, diaryId: created.diaryId });
+    // 彻底删除是真的删行（回收站里也不该再留着）。
+    expect(await fetch(`${baseUrl}/diary/${created.diaryId}`, { headers }).then((response) => response.status)).toBe(404);
+    expect(await fetch(`${baseUrl}/diary`, { headers }).then((response) => response.json())).toEqual([]);
+  });
 });

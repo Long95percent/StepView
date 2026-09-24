@@ -101,6 +101,24 @@ describe("diary repository", () => {
     expect(diary.count()).toBe(2);
   });
 
+  it("carries each entry's own links on list and search results", () => {
+    const twoNodes = diary.create(
+      entry({ content: "一条日记挂在两个节点上", links: [{ targetType: "node", targetId: "node-1" }, { targetType: "node", targetId: "node-2" }] }),
+    );
+    const noLinks = diary.create(entry({ content: "这条没有关联", occurredAt: "2026-09-23T02:00:00.000Z" }));
+
+    const listed = diary.list({});
+    expect(listed[0].diaryId).toBe(twoNodes.diaryId);
+    expect(listed[0].links.map((link) => link.targetId)).toEqual(["node-1", "node-2"]);
+    // 关联是按行挂的，不能串到同一页的其他日记上。
+    expect(listed[1].links).toEqual([]);
+    expect(listed[1].diaryId).toBe(noLinks.diaryId);
+
+    // 检索走的是另一条 SQL，也要带上关联。
+    expect(diary.search({ query: "两个节点" })[0].links.map((link) => link.targetId)).toEqual(["node-1", "node-2"]);
+    expect(diary.search({ query: "没有关联" })[0].links).toEqual([]);
+  });
+
   it("moves entries to the trash, restores them, and deletes them for good", () => {
     const created = diary.create(entry({ content: "先写点什么" }));
 
@@ -115,12 +133,16 @@ describe("diary repository", () => {
     expect(restored).toMatchObject({ status: "active", deletedAt: null });
     expect(diary.search({ query: "先写点" })).toHaveLength(1);
 
+    // 撤销里存着整篇正文，所以先确认它真的存在，否则下面那条"删干净了"的断言是空过的。
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_revisions WHERE diary_id = ?").get(created.diaryId).count).toBeGreaterThan(0);
+
     expect(diary.remove(created.diaryId)).toBe(true);
     expect(diary.remove(created.diaryId)).toBe(false);
     expect(diary.get(created.diaryId)).toBe(null);
     expect(diary.search({ query: "先写点" })).toEqual([]);
     expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_links WHERE diary_id = ?").get(created.diaryId).count).toBe(0);
     expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_entry_tags WHERE diary_id = ?").get(created.diaryId).count).toBe(0);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_revisions WHERE diary_id = ?").get(created.diaryId).count).toBe(0);
   });
 
   it("replaces links on update instead of colliding with the unique key", () => {

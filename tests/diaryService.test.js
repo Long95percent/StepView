@@ -123,7 +123,8 @@ describe("diary service", () => {
     expect(entries.every((entry) => entry.source === "node-note-import")).toBe(true);
     // 导入出来的就是节点日记，必须和 0009 迁移的回填口径一致。
     expect(entries.every((entry) => entry.kind === "node")).toBe(true);
-    expect(entries[0].links).toBeUndefined();
+    // 列表也要带关联：界面靠它显示"关联到哪个节点"和"原节点已删除"。批量查的，不是逐条查。
+    expect(entries[0].links[0]).toMatchObject({ targetType: "node", targetId: "node-4", role: "primary" });
     expect(service.get(entries[0].diaryId).links[0]).toMatchObject({ targetType: "node", targetId: "node-4", role: "primary" });
 
     // 导入是只读画布的：节点原文一个字都不动。

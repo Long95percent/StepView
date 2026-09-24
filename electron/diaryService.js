@@ -158,7 +158,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     throw withStatus(400, new DiaryInputError(`不支持的日记操作：${proposal.operation || "(空)"}`, { field: "operation" }));
   }
 
-  /** 详情：连关联一起返回，列表接口不带关联（列表要翻很多条，逐条查关联不划算）。 */
+  /** 详情：连关联一起返回。列表也会带关联，但那是批量查的，不是逐条查。 */
   function get(diaryId) {
     const entry = requireEntry(diaryId, repository.get(diaryId));
     return { ...entry, links: repository.listLinks(diaryId) };

@@ -13,7 +13,9 @@ function json(response, status, payload, origin) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": origin || "null",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    // DELETE 必须列出来：浏览器的预检只看这张表，漏了它，删除日记/彻底删除在浏览器里
+    // 会直接报 "Failed to fetch"，而请求根本没到服务端。
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     Vary: "Origin",
   });
   response.end(JSON.stringify(payload));

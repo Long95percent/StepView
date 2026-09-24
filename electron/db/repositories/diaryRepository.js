@@ -90,6 +90,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     WHERE id = ? AND account_id = ? AND rev = ?
   `);
   const deleteEntryStatement = db.prepare("DELETE FROM diary_entries WHERE id = ? AND account_id = ?");
+  const deleteRevisionsStatement = db.prepare("DELETE FROM diary_revisions WHERE diary_id = ? AND account_id = ?");
 
   const selectLinksStatement = db.prepare("SELECT * FROM diary_links WHERE diary_id = ? AND account_id = ? ORDER BY created_at ASC");
   // 已存在的关联只更新角色，不动 orphaned_at / created_by / created_at：
@@ -115,6 +116,9 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   );
   const selectTagsForEntriesStatement = db.prepare(
     "SELECT et.diary_id, t.name FROM diary_entry_tags et JOIN diary_tags t ON t.id = et.tag_id WHERE et.diary_id IN (SELECT value FROM json_each(?)) ORDER BY t.name ASC",
+  );
+  const selectLinksForEntriesStatement = db.prepare(
+    "SELECT * FROM diary_links WHERE account_id = ? AND diary_id IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC",
   );
   const selectTagByNameStatement = db.prepare("SELECT id FROM diary_tags WHERE account_id = ? AND name = ?");
   const insertTagStatement = db.prepare("INSERT INTO diary_tags (id, account_id, name, created_at) VALUES (?, ?, ?, ?)");
@@ -166,6 +170,32 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       map.get(row.diary_id).push(row.name);
     }
     return map;
+  }
+
+  /**
+   * 一页日记的关联，一次查完。
+   *
+   * 之前列表刻意不带关联，理由是"逐条查关联不划算"——那是针对 `listLinks(id)` 一行一次查询说的。
+   * 这里和标签走同一条批量路径（一次 IN 查询覆盖整页），代价一样，所以列表可以放心带上关联：
+   * 界面要按关联的节点显示小标签，还要标出"原节点已删除"，缺了关联这两件事都做不了。
+   */
+  function linksForEntries(diaryIds) {
+    if (diaryIds.length === 0) return new Map();
+    const map = new Map();
+    for (const row of selectLinksForEntriesStatement.all(accountId, JSON.stringify(diaryIds))) {
+      if (!map.has(row.diary_id)) map.set(row.diary_id, []);
+      map.get(row.diary_id).push(linkFromRow(row));
+    }
+    return map;
+  }
+
+  /** 把标签和关联一次性挂到列表行上。 */
+  function hydrateEntries(rows) {
+    if (rows.length === 0) return [];
+    const ids = rows.map((row) => row.id);
+    const tags = tagsForEntries(ids);
+    const links = linksForEntries(ids);
+    return rows.map((row) => ({ ...entryFromRow(row, tags.get(row.id) || []), links: links.get(row.id) || [] }));
   }
 
   function syncTags(diaryId, tags, nowIso) {
@@ -357,11 +387,21 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     return update(id, { status }, { expectedRev: Number(current.rev), reason, now });
   }
 
+  /**
+   * 彻底删除：条目、全文索引、修订历史一起清掉，不留半条。
+   *
+   * diary_revisions 是唯一没有 ON DELETE CASCADE 的从表（标签和关联都有），所以必须自己删：
+   * 漏掉它，"彻底删除"就只是让正文从界面上消失，用户写过的每一个字还留在库里。
+   * 删行和索引必须同一个事务，否则可能出现"索引没了、条目还在"的中间态。
+   */
   function remove(id) {
-    const info = deleteEntryStatement.run(String(id), accountId);
-    if (Number(info.changes || 0) === 0) return false;
-    deleteFtsStatement.run(String(id));
-    return true;
+    return connection.withTransaction(() => {
+      const info = deleteEntryStatement.run(String(id), accountId);
+      if (Number(info.changes || 0) === 0) return false;
+      deleteFtsStatement.run(String(id));
+      deleteRevisionsStatement.run(String(id), accountId);
+      return true;
+    });
   }
 
   const LIST_COLUMNS = "SELECT * FROM diary_entries WHERE account_id = ?";
@@ -406,8 +446,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   function list(filter = {}) {
     const { sql, params } = buildListQuery(filter);
     const rows = db.prepare(sql).all(...params);
-    const tags = tagsForEntries(rows.map((row) => row.id));
-    return rows.map((row) => entryFromRow(row, tags.get(row.id) || []));
+    return hydrateEntries(rows);
   }
 
   /** 把所有日记的正文拼成一份"哪一天写了什么"的时间线，供 Agent 读。 */
@@ -479,9 +518,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     clauses.push("ORDER BY e.occurred_at DESC, e.id DESC LIMIT ? OFFSET ?");
     params.push(limit, offset);
 
-    const rows = db.prepare(clauses.join(" ")).all(...params);
-    const tags = tagsForEntries(rows.map((row) => row.id));
-    return rows.map((row) => entryFromRow(row, tags.get(row.id) || []));
+    return hydrateEntries(db.prepare(clauses.join(" ")).all(...params));
   }
 
   function listLinks(diaryId) {

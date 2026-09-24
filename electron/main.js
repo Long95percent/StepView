@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
@@ -7,6 +7,14 @@ import { createGateway } from "./gateway/createGateway.js";
 import { streamOpenAIChat } from "./openAiStream.js";
 import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
 import { completeChatWithTools } from "./agentChatCompletion.js";
+import {
+  ACCOUNT_REQUIRED_TABLES,
+  GLOBAL_REQUIRED_TABLES,
+  exportArchive,
+  inspectArchive,
+  restoreArchive,
+} from "./db/archive.js";
+import { GLOBAL_MIGRATIONS, MIGRATIONS } from "./db/migrations/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -144,6 +152,72 @@ app.whenReady().then(async () => {
     await shell.showItemInFolder(exportedPath);
     return exportedPath;
   });
+  // 统一的备份与恢复。导出只读两个库，恢复先校验再替换，当前数据改名保留不删除。
+  const supportedSchemaVersion = {
+    global: Math.max(...GLOBAL_MIGRATIONS.map((migration) => migration.version)),
+    account: Math.max(...MIGRATIONS.map((migration) => migration.version)),
+  };
+  const requiredTables = { global: GLOBAL_REQUIRED_TABLES, account: ACCOUNT_REQUIRED_TABLES };
+
+  async function pickArchiveDirectory({ title, create }) {
+    const properties = ["openDirectory"];
+    if (create) properties.push("createDirectory");
+    const choice = await dialog.showOpenDialog({ title, properties });
+    if (choice.canceled || !choice.filePaths[0]) return null;
+    return choice.filePaths[0];
+  }
+
+  ipcMain.handle("data:export-archive", async () => {
+    const parentDir = await pickArchiveDirectory({ title: "选择备份导出的位置", create: true });
+    if (!parentDir) return { ok: false, canceled: true };
+    const paths = gateway.getDatabasePaths();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const result = exportArchive({
+      globalDbPath: paths.global,
+      accountDbPath: paths.account,
+      targetDir: path.join(parentDir, `stepview-backup-${stamp}`),
+      appVersion: app.getVersion(),
+      label: "manual",
+    });
+    await shell.showItemInFolder(result.manifestPath);
+    return { ok: true, dir: result.dir, databases: result.manifest.databases.map((database) => database.name), tables: result.manifest.databases.reduce((sum, database) => sum + database.tables.length, 0) };
+  });
+
+  ipcMain.handle("data:inspect-archive", async (_event, request = {}) => {
+    const dir = request.dir || (await pickArchiveDirectory({ title: "选择要检查的备份目录" }));
+    if (!dir) return { ok: false, canceled: true };
+    const report = inspectArchive({ dir, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    return { ok: report.ok, dir, exportedAt: report.manifest?.exportedAt || null, problems: report.problems, databases: report.databases };
+  });
+
+  ipcMain.handle("data:restore-archive", async (_event, request = {}) => {
+    const dir = request.dir || (await pickArchiveDirectory({ title: "选择要恢复的备份目录" }));
+    if (!dir) return { ok: false, canceled: true };
+
+    const report = inspectArchive({ dir, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    if (!report.ok) return { ok: false, dir, problems: report.problems };
+
+    const confirmation = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["取消", "恢复并重启"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "用这份备份替换当前数据？",
+      detail: `备份时间：${report.manifest?.exportedAt || "未知"}\n\n当前的数据库会改名保留在数据目录里（后缀 .pre-restore-时间），不会被删除。替换完成后应用会自动重启。`,
+    });
+    if (confirmation.response !== 1) return { ok: false, canceled: true };
+
+    // 路径要在关闭网关之前取：家庭模式下账号库的位置取决于当前登录的账号。
+    const paths = gateway.getDatabasePaths();
+    // 先把所有连接关掉，再动文件：SQLite 还有连接打开时替换文件会读到半截状态。
+    await gateway.close();
+    const result = restoreArchive({ dir, targets: paths, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    isQuittingAfterStorageFlush = true;
+    app.relaunch();
+    app.exit(0);
+    return { ok: true, restored: result.restored.map((entry) => entry.name), kept: result.kept.map((entry) => entry.path) };
+  });
+
   ipcMain.handle("diary:list", (_event, options = {}) => gateway.getContext().diaryService.list(options || {}));
   ipcMain.handle("diary:get", (_event, request = {}) => gateway.getContext().diaryService.get(request.diaryId));
   ipcMain.handle("diary:create", (_event, input = {}) => gateway.getContext().diaryService.create(input));

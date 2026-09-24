@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld("stepview", {
   updateAgentMemory: (request) => ipcRenderer.invoke("agent:memory:feedback", request),
   listAgentMemoryEvidence: (request) => ipcRenderer.invoke("agent:memory:evidence", request),
   askOpenAI: (request) => ipcRenderer.invoke("ai:ask-openai", request),
+  data: {
+    exportArchive: () => ipcRenderer.invoke("data:export-archive"),
+    inspectArchive: (request) => ipcRenderer.invoke("data:inspect-archive", request),
+    restoreArchive: (request) => ipcRenderer.invoke("data:restore-archive", request),
+  },
   diary: {
     list: (options) => ipcRenderer.invoke("diary:list", options),
     get: (request) => ipcRenderer.invoke("diary:get", request),

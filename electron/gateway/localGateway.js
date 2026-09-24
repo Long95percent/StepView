@@ -1,6 +1,7 @@
 import path from "node:path";
 import { buildAgentMemory } from "../../src/agentMemory.js";
 import { boardHasContent, readBoardSnapshot, stageLegacyDatabaseFiles } from "../db/transfer.js";
+import { ACCOUNT_DB_FILE, GLOBAL_DB_FILE } from "../db/index.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
 import { validateNetworkPolicy } from "./networkPolicy.js";
@@ -24,6 +25,20 @@ export function createLocalGateway({
 
   function getDataDir() {
     return config.dataDir ? path.resolve(config.dataDir) : appDataDir;
+  }
+
+  /**
+   * 当前生效的两个数据库文件。备份与恢复都从这里取路径，避免各写一份"数据存在哪"的知识。
+   * 家庭模式下每个账号一个库，所以账号库的路径取决于当前登录的是谁。
+   */
+  function getDatabasePaths() {
+    const dataDir = getDataDir();
+    const accountId = context?.account?.accountId;
+    const accountDir = config.mode === "personal" || !accountId ? dataDir : path.join(dataDir, "accounts", accountId);
+    return {
+      global: path.join(dataDir, GLOBAL_DB_FILE),
+      account: accountId ? path.join(accountDir, ACCOUNT_DB_FILE) : null,
+    };
   }
 
   function getCurrentAccount() {
@@ -161,6 +176,8 @@ export function createLocalGateway({
     getContextGeneration: () => generation,
     isCurrentContext: (candidate, candidateGeneration) => candidate === context && candidateGeneration === generation,
     getContext: requireContext,
+    getDataDir,
+    getDatabasePaths,
     loadBoard,
     saveBoard,
     loadAgentJournal,

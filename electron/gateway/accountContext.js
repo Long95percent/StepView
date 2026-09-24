@@ -16,18 +16,25 @@ import { createApprovalManager } from "../agent/approvalManager.js";
 import { createBoardChangeStore } from "../agent/boardChangeStore.js";
 import { createBoardChangeExecutor } from "../agent/boardChangeExecutor.js";
 import { createApprovalService } from "../agent/approvalService.js";
+import { openAccountDatabase } from "../db/index.js";
+import { createApprovalRepository } from "../db/repositories/approvalRepository.js";
 
 export function createAccountContext({
   account,
   accountsDir,
+  dataDir: explicitDataDir,
+  mode = "family",
   boardStorageFactory = createBoardStorage,
   agentSqliteStoreFactory = createAgentSqliteStore,
   redisCacheFactory = createRedisAgentCache,
   mem0ClientFactory = createMem0Client,
   agentServiceFactory = createAgentService,
+  databaseFactory = openAccountDatabase,
 } = {}) {
   if (!account?.accountId) throw new Error("Account is required.");
-  const dataDir = path.join(accountsDir, account.accountId);
+  const dataDir = explicitDataDir ? path.resolve(explicitDataDir) : path.join(accountsDir, account.accountId);
+  const database = databaseFactory({ dataDir });
+  const approvalRepository = createApprovalRepository({ connection: database });
   const boardStorage = boardStorageFactory({ dataDir });
   const agentSqliteStore = agentSqliteStoreFactory({ dataDir });
   const memoryRepository = createAgentMemorySqliteStore({ dataDir, accountId: account.accountId });
@@ -39,8 +46,8 @@ export function createAccountContext({
   const toolRegistry = createToolRegistry();
   registerBuiltInTools({ registry: toolRegistry });
   const toolRuntime = createToolRuntime({ registry: toolRegistry });
-  const approvalManager = createApprovalManager();
-  const boardChangeStore = createBoardChangeStore({ dataDir });
+  const approvalManager = createApprovalManager({ repository: approvalRepository });
+  const boardChangeStore = createBoardChangeStore({ connection: database, accountId: account.accountId });
   const boardChangeExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
   const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository });
   const redisCache = redisCacheFactory({ namespace: `stepview:${account.accountId}:agent` });
@@ -48,10 +55,12 @@ export function createAccountContext({
   const agentService = agentServiceFactory({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: memoryExtractorWithPolicy, contextOrchestrator });
 
   return {
-    mode: "family",
+    mode,
     accountId: account.accountId,
     account,
     dataDir,
+    database,
+    approvalRepository,
     boardStorage,
     agentSqliteStore,
     memoryRepository,
@@ -74,6 +83,7 @@ export function createAccountContext({
       agentSqliteStore.close();
       memoryPlugins.close();
       memoryRepository.close();
+      database.close();
     },
   };
 }

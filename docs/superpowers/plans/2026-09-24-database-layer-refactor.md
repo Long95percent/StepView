@@ -300,19 +300,22 @@ CREATE INDEX idx_diary_links_target ON diary_links(account_id, target_type, targ
 
 本阶段零行为变化，纯新增，风险最低。
 
-### Phase 1：把内存态和文件目录搬进数据库
+### Phase 1：把内存态和文件目录搬进数据库 ✅ 已完成
 
 这一阶段专门修前面第 1、2、4 条问题。
 
-- [ ] 新建 `electron/db/repositories/approvalRepository.js`，迁移 `0002-approvals.sql` 建 `approvals` 与 `snapshots` 表。
-- [ ] 改写 `electron/agent/approvalManager.js`：内存 `Map` 换成仓储调用，接口签名保持不变（`submit` / `list` / `find` / `decide`），上层不需要改动。
-- [ ] 改写 `electron/agent/boardChangeStore.js`：`proposals/*.json` 和 `history/*.json` 的读写换成仓储调用，对外导出的 `boardHash`、`isProposalId`、`stage` / `get` / `list` / `decide` / `remove` / `prune` / `snapshotBoard` 签名全部保持不变。
-- [ ] 改写 `electron/agent/approvalService.js` 的 `list`，改为一次 SQL 查询取回全部待确认项，去掉"读目录 + 逐个解析"。
-- [ ] 改写网关的 `contexts = new Map()` 为带容量上限和空闲淘汰的 LRU 缓存，并在淘汰时调用 `context.close()` 释放 SQLite 连接。
-- [ ] 迁移脚本 `0002` 增加一次性导入：启动时若 `approvals` 表为空且 `proposals/` 目录存在，则导入历史提案，**旧文件原样保留不删**。
-- [ ] 测试：审批重启后仍在（新增用例：重建仓储后 `list` 仍能读到）；LRU 淘汰会调用 `close`；历史提案导入幂等（跑两次不产生重复）。
-- [ ] 验证：`npm test`，重点看 `tests/boardChangeStore.test.js`、`tests/approvalService.test.js`、`tests/familyHttpServer.test.js`。
-- [ ] 提交：`refactor: persist approvals in the database layer`
+- [x] 新建 `electron/db/repositories/approvalRepository.js`，迁移 `0002-approvals.sql` 建 `approvals` 与 `snapshots` 表。
+- [x] 改写 `electron/agent/approvalManager.js`：内存 `Map` 换成仓储调用，`submit` / `list` / `find` / `decide` 签名不变。记忆类提案现在重启后仍在，并且 `list` / `find` / `decide` 会排除画布提案，避免同一个提案在审批列表里出现两次。
+- [x] 改写 `electron/agent/boardChangeStore.js`：提案与快照改成表，`stage` / `get` / `list` / `decide` / `remove` / `prune` / `snapshotBoard` 签名不变，新增 `listSnapshots()`。
+- [x] 改写 `electron/agent/approvalService.js` 的 `list`：一次查询取回待确认项，不再读目录逐个解析。
+- [x] 改写网关的 `contexts = new Map()`：新增 `electron/gateway/contextCache.js`，带容量上限与空闲淘汰，淘汰和关闭时都会释放账号上下文。
+- [x] 新增 `electron/db/legacyImport.js`：启动时导入旧 `proposals/*.json` 与 `history/*.json`，用 `kv` 标记保证幂等，**旧文件原样保留不删不改**，同 id 记录已存在时完全不碰。
+- [x] 顺手消除重复：`localGateway` 里那份手写的账号上下文（和 `createAccountContext` 几乎一字不差）已删除，改为复用同一个工厂；个人模式的数据目录仍是 `dataDir` 本身，升级后用户在原地看到自己的画布。
+- [x] 测试：审批跨重启仍在；LRU 淘汰与空闲清理会关闭上下文；历史导入幂等且不会把已决策的提案变回待确认；一批无索引的文件扫描断言换成表查询。
+- [x] 验证：`npm test` 通过（43 个文件 234 个用例）。
+- [x] 提交：`refactor: persist approvals in the database layer`
+
+**计划外的必要改动**：`proposalsDir()` 与 `historyDir()` 被移除。数据已经不在文件里了，继续保留这两个方法只会误导调用方。受影响的断言同步改成了表查询。
 
 ### Phase 2：合并三个 SQLite
 

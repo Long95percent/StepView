@@ -67,14 +67,14 @@ describe("database migrations", () => {
 
     const second = createConnection({ dbPath });
     expect(runMigrations(second, { now: NOW }).applied).toEqual([]);
-    expect(listAppliedMigrations(second).map((row) => row.version)).toEqual([1]);
+    expect(listAppliedMigrations(second).map((row) => row.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
     second.close();
   });
 
   it("refuses to run when an applied migration file was edited", () => {
     const connection = open();
     runMigrations(connection, { now: NOW });
-    connection.db.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 1").run("tampered");
+    connection.db.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = ?").run("tampered", MIGRATIONS[0].version);
     expect(() => runMigrations(connection, { now: NOW })).toThrow(/内容被修改过/);
     try {
       runMigrations(connection, { now: NOW });
@@ -123,7 +123,7 @@ describe("database migrations", () => {
 
   it("opens an account database through the public entry point", () => {
     const db = openAccountDatabase({ dataDir: tempDir });
-    expect(db.appliedMigrations.map((migration) => migration.version)).toEqual([1]);
+    expect(db.appliedMigrations.map((migration) => migration.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
     expect(db.tableExists("kv")).toBe(true);
     expect(db.dbPath.endsWith("stepview.sqlite")).toBe(true);
     db.close();

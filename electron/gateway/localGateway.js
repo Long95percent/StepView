@@ -42,42 +42,13 @@ export function createLocalGateway({
     if (config.mode === "family") {
       accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
     } else {
-      const { createBoardStorage } = await import("../boardStorage.js");
-      const { createAgentSqliteStore } = await import("../agentSqliteStore.js");
-      const { createRedisAgentCache } = await import("../agentRedisClient.js");
-      const { createMem0Client } = await import("../agentMem0Client.js");
-      const { createAgentService } = await import("../agentService.js");
-      const { createAgentMemorySqliteStore } = await import("../agentMemorySqliteStore.js");
-      const { createMemoryPluginManager } = await import("../agent/memoryPluginManager.js");
-      const { createMemoryExtractor } = await import("../agent/memoryExtractor.js");
-      const { createMemoryWriter } = await import("../agent/memoryWriter.js");
-      const { createContextOrchestrator } = await import("../agent/contextOrchestrator.js");
-      const { createToolRegistry } = await import("../agent/toolRegistry.js");
-      const { createToolRuntime } = await import("../agent/toolRuntime.js");
-      const { registerBuiltInTools } = await import("../agent/builtInTools.js");
-      const { createApprovalManager } = await import("../agent/approvalManager.js");
-      const { createBoardChangeStore } = await import("../agent/boardChangeStore.js");
-      const { createBoardChangeExecutor } = await import("../agent/boardChangeExecutor.js");
-      const { createApprovalService } = await import("../agent/approvalService.js");
-      const boardStorage = createBoardStorage({ dataDir });
-      const agentSqliteStore = createAgentSqliteStore({ dataDir });
-      const redisCache = createRedisAgentCache();
-      const mem0Client = createMem0Client();
-      const memoryRepository = createAgentMemorySqliteStore({ dataDir, accountId: PERSONAL_ACCOUNT_ID });
-      const memoryPlugins = createMemoryPluginManager();
-      const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
-      const memoryWriter = createMemoryWriter({ repository: memoryRepository });
-      const policyExtractor = createMemoryExtractor({ repository: memoryRepository, writer: memoryWriter });
-      const contextOrchestrator = createContextOrchestrator({ repository: memoryRepository, memoryPlugins });
-      const toolRegistry = createToolRegistry();
-      registerBuiltInTools({ registry: toolRegistry });
-      const toolRuntime = createToolRuntime({ registry: toolRegistry });
-      const approvalManager = createApprovalManager();
-      const boardChangeStore = createBoardChangeStore({ dataDir });
-      const boardChangeExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
-      const approvalService = createApprovalService({ approvalManager, boardChangeStore, boardChangeExecutor, memoryRepository });
-      const agentService = createAgentService({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: policyExtractor, contextOrchestrator });
-      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, memoryRepository, memoryPlugins, contextOrchestrator, toolRegistry, toolRuntime, approvalManager, boardChangeStore, boardChangeExecutor, approvalService, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); await memoryPlugins.close(); memoryRepository.close(); } };
+      // 个人模式的数据目录就是 dataDir 本身（家庭模式才是 accountsDir/<accountId>），
+      // 这一点必须保持，否则升级后用户会找不到自己原来的画布。
+      context = accountContextFactory({
+        account: { id: PERSONAL_ACCOUNT_ID, accountId: PERSONAL_ACCOUNT_ID },
+        dataDir,
+        mode: config.mode,
+      });
     }
     initialized = true;
     return context;

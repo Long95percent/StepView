@@ -7,6 +7,8 @@ import { createApprovalService } from "../electron/agent/approvalService.js";
 import { createBoardChangeStore } from "../electron/agent/boardChangeStore.js";
 import { createBoardChangeExecutor } from "../electron/agent/boardChangeExecutor.js";
 import { createBoardStorage } from "../electron/boardStorage.js";
+import { openAccountDatabase } from "../electron/db/index.js";
+import { createApprovalRepository } from "../electron/db/repositories/approvalRepository.js";
 import { normalizeBoard, buildTask } from "../src/progressCore.js";
 
 const NOW = new Date("2026-05-20T10:00:00.000Z");
@@ -14,17 +16,21 @@ const BOARD_PROPOSAL_ID = "proposal-abcdef123456";
 
 describe("approval service", () => {
   let tempDir;
+  let database;
 
   afterEach(async () => {
+    database?.close();
+    database = undefined;
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = undefined;
   });
 
   async function setup() {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-approvals-"));
+    database = openAccountDatabase({ dataDir: tempDir });
     const boardStorage = createBoardStorage({ dataDir: tempDir });
-    const approvalManager = createApprovalManager();
-    const boardChangeStore = createBoardChangeStore({ dataDir: tempDir });
+    const approvalManager = createApprovalManager({ repository: createApprovalRepository({ connection: database }) });
+    const boardChangeStore = createBoardChangeStore({ connection: database, accountId: "account-a" });
     const realExecutor = createBoardChangeExecutor({ boardStorage, changeStore: boardChangeStore });
     const boardChangeExecutor = { commit: vi.fn(realExecutor.commit), discard: vi.fn(realExecutor.discard) };
     const memoryRepository = { upsert: vi.fn(() => ({ id: "mem-1" })) };

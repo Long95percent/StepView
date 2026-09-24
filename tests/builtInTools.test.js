@@ -7,14 +7,17 @@ import { registerBuiltInTools } from "../electron/agent/builtInTools.js";
 import { createToolRuntime } from "../electron/agent/toolRuntime.js";
 import { createBoardStorage } from "../electron/boardStorage.js";
 import { createBoardChangeStore } from "../electron/agent/boardChangeStore.js";
+import { openAccountDatabase } from "../electron/db/index.js";
 import { normalizeBoard, buildTask } from "../src/progressCore.js";
 
 const NOW = new Date("2026-05-20T10:00:00.000Z");
 
 describe("built-in tools", () => {
   let tempDir;
+  const databases = [];
 
   afterEach(async () => {
+    while (databases.length) databases.pop().close();
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = undefined;
   });
@@ -29,7 +32,9 @@ describe("built-in tools", () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-tools-"));
     const boardStorage = createBoardStorage({ dataDir: tempDir });
     await boardStorage.writeBoard(normalizeBoard({ tasks: [buildTask("考研", { x: 1, y: 2 }, NOW)] }));
-    const boardChangeStore = createBoardChangeStore({ dataDir: tempDir });
+    const database = openAccountDatabase({ dataDir: tempDir });
+    databases.push(database);
+    const boardChangeStore = createBoardChangeStore({ connection: database, accountId: "account-a" });
     return { accountId: "account-a", sessionId: "session-1", boardStorage, boardChangeStore };
   }
 

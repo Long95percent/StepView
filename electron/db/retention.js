@@ -15,7 +15,53 @@ import { randomUUID } from "node:crypto";
  *   keep        限额规则 { limit, orderBy, filter, partitionBy }
  *   description 给人看的说明
  */
-export const RETENTION_RULES = Object.freeze([]);
+export const DEFAULT_APPROVAL_TTL_DAYS = 7;
+export const DEFAULT_MAX_PENDING_APPROVALS = 20;
+export const DEFAULT_MAX_SNAPSHOTS = 20;
+
+/**
+ * 审批记录的保留规则。
+ *
+ * 规则形状放在这里，调用方只提供数量和时间参数（比如某个 store 自己的上限）。
+ * 语义与重构前一致：已决策的记录、以及超过 TTL 的记录都会被删；待确认的只按数量保留最新的若干条。
+ */
+export function buildApprovalRetentionRules({ kind = "board_change", maxPending = DEFAULT_MAX_PENDING_APPROVALS, ttlDays = DEFAULT_APPROVAL_TTL_DAYS } = {}) {
+  const safeKind = String(kind);
+  if (!/^[a-z_]+$/.test(safeKind)) throw new RetentionError(`非法的审批类型：${kind}`, { code: "RETENTION_INVALID_KIND" });
+  return [
+    {
+      id: `approvals-expired:${safeKind}`,
+      table: "approvals",
+      where: `kind = '${safeKind}' AND (status != 'pending' OR created_at < :ttl)`,
+      ttlDays,
+    },
+    {
+      id: `approvals-overflow:${safeKind}`,
+      table: "approvals",
+      key: "id",
+      keep: { limit: maxPending, orderBy: "created_at DESC, id DESC", filter: `kind = '${safeKind}' AND status = 'pending'` },
+    },
+  ];
+}
+
+export function buildSnapshotRetentionRules({ kind = "board", maxSnapshots = DEFAULT_MAX_SNAPSHOTS } = {}) {
+  const safeKind = String(kind);
+  if (!/^[a-z_]+$/.test(safeKind)) throw new RetentionError(`非法的快照类型：${kind}`, { code: "RETENTION_INVALID_KIND" });
+  return [
+    {
+      id: `snapshots-overflow:${safeKind}`,
+      table: "snapshots",
+      key: "id",
+      keep: { limit: maxSnapshots, orderBy: "created_at DESC, id DESC", filter: `kind = '${safeKind}'` },
+    },
+  ];
+}
+
+/** 全局清理时使用的默认规则。Phase 4 接入定时执行后生效。 */
+export const RETENTION_RULES = Object.freeze([
+  ...buildApprovalRetentionRules(),
+  ...buildSnapshotRetentionRules(),
+]);
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

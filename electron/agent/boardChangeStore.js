@@ -1,12 +1,22 @@
-import defaultFs from "node:fs/promises";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { normalizeBoard } from "../../src/progressCore.js";
+import { createApprovalRepository } from "../db/repositories/approvalRepository.js";
+import {
+  DEFAULT_APPROVAL_TTL_DAYS,
+  DEFAULT_MAX_PENDING_APPROVALS,
+  DEFAULT_MAX_SNAPSHOTS as DEFAULT_MAX_SNAPSHOTS_COUNT,
+  buildApprovalRetentionRules,
+  buildSnapshotRetentionRules,
+  runRetention,
+} from "../db/retention.js";
 
 const PROPOSAL_ID_PATTERN = /^proposal-[A-Za-z0-9-]{6,120}$/;
-export const DEFAULT_MAX_PROPOSALS = 20;
-export const DEFAULT_MAX_SNAPSHOTS = 20;
-export const DEFAULT_PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const BOARD_CHANGE_KIND = "board_change";
+export const BOARD_SNAPSHOT_KIND = "board";
+
+export const DEFAULT_MAX_PROPOSALS = DEFAULT_MAX_PENDING_APPROVALS;
+export const DEFAULT_MAX_SNAPSHOTS = DEFAULT_MAX_SNAPSHOTS_COUNT;
+export const DEFAULT_PROPOSAL_TTL_MS = DEFAULT_APPROVAL_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 export function canonicalJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
@@ -23,141 +33,148 @@ export function isProposalId(value) {
   return PROPOSAL_ID_PATTERN.test(String(value || ""));
 }
 
+function requireProposalId(value) {
+  const id = String(value || "");
+  if (!PROPOSAL_ID_PATTERN.test(id)) throw new Error(`Invalid proposal id: ${value}`);
+  return id;
+}
+
+function toProposal(row, { includePayload }) {
+  if (!row) return null;
+  const record = {
+    proposalId: row.approvalId,
+    accountId: row.accountId,
+    sessionId: row.sessionId || null,
+    operation: row.operation,
+    reason: row.reason,
+    summary: row.summary,
+    diff: row.diff || { changes: [], lines: [], counts: { added: 0, removed: 0, modified: 0 } },
+    baseHash: row.baseHash,
+    status: row.status,
+    createdAt: row.createdAt,
+    decidedAt: row.decidedAt || null,
+  };
+  if (includePayload) {
+    record.before = normalizeBoard(row.payload?.before);
+    record.after = normalizeBoard(row.payload?.after);
+  }
+  return record;
+}
+
+/**
+ * 画布变更提案与快照。
+ *
+ * 以前是 “一个提案一个 JSON 文件”，列表要 readdir 整个目录再逐个解析。
+ * 现在落到 approvals / snapshots 两张表，列表是一条带索引的查询。
+ *
+ * 注意：不再返回 proposalsDir / historyDir —— 数据已经不在文件里了。
+ */
 export function createBoardChangeStore({
-  dataDir,
-  fsApi = defaultFs,
+  connection,
+  accountId,
   maxProposals = DEFAULT_MAX_PROPOSALS,
-  maxSnapshots = DEFAULT_MAX_SNAPSHOTS,
+  maxSnapshots = DEFAULT_MAX_SNAPSHOTS_COUNT,
   ttlMs = DEFAULT_PROPOSAL_TTL_MS,
+  now = () => new Date(),
   logger = console,
 } = {}) {
-  if (!dataDir) throw new Error("Board change store requires a dataDir.");
+  if (!connection?.db) throw new Error("Board change store requires a database connection.");
+  if (!accountId) throw new Error("Board change store requires an accountId.");
 
-  const proposalsDir = () => path.join(dataDir, "proposals");
-  const historyDir = () => path.join(dataDir, "history");
+  const repository = createApprovalRepository({ connection });
 
-  function proposalPath(proposalId) {
-    const id = String(proposalId || "");
-    if (!PROPOSAL_ID_PATTERN.test(id)) throw new Error(`Invalid proposal id: ${proposalId}`);
-    return path.join(proposalsDir(), `${id}.json`);
+  function prune() {
+    const rules = [
+      ...buildApprovalRetentionRules({ kind: BOARD_CHANGE_KIND, maxPending: maxProposals, ttlDays: ttlMs / (24 * 60 * 60 * 1000) }),
+      ...buildSnapshotRetentionRules({ kind: BOARD_SNAPSHOT_KIND, maxSnapshots }),
+    ];
+    const report = runRetention({ connection, rules, now: now(), logger });
+    const kept = repository.list({ kind: BOARD_CHANGE_KIND }).length;
+    return { removed: report.removedTotal, kept };
   }
 
-  async function writeJsonAtomic(filePath, payload) {
-    const tempPath = `${filePath}.tmp`;
-    await fsApi.mkdir(path.dirname(filePath), { recursive: true });
-    await fsApi.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf8");
-    await fsApi.rename(tempPath, filePath);
-  }
+  function stage({ proposalId, accountId: recordAccountId, sessionId = null, operation, reason = "", summary, diff, before, after }) {
+    const id = requireProposalId(proposalId);
+    const owner = recordAccountId || accountId;
+    if (!owner) throw new Error("A proposal requires an accountId.");
 
-  async function readJson(filePath) {
-    try {
-      return JSON.parse(await fsApi.readFile(filePath, "utf8"));
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      logger.warn?.(`Skipping unreadable proposal file ${filePath}`, error);
-      return null;
-    }
-  }
-
-  async function listIds(directory, suffix = ".json") {
-    try {
-      const entries = await fsApi.readdir(directory);
-      return entries.filter((entry) => entry.endsWith(suffix) && !entry.endsWith(".tmp")).sort();
-    } catch (error) {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    }
-  }
-
-  function stripPayload(record) {
-    if (!record) return null;
-    const { before, after, ...rest } = record;
-    return rest;
-  }
-
-  async function stage({ proposalId, accountId, sessionId = null, operation, reason = "", summary, diff, before, after }) {
-    if (!accountId) throw new Error("A proposal requires an accountId.");
-    const record = {
-      proposalId,
-      accountId,
-      sessionId,
-      operation,
-      reason: String(reason || "").slice(0, 500),
+    const row = repository.create({
+      approvalId: id,
+      accountId: owner,
+      kind: BOARD_CHANGE_KIND,
+      status: "pending",
       summary: String(summary || ""),
+      reason: String(reason || "").slice(0, 500),
+      operation,
+      sessionId,
+      payload: { before: normalizeBoard(before), after: normalizeBoard(after) },
       diff: diff || { changes: [], lines: [], counts: { added: 0, removed: 0, modified: 0 } },
       baseHash: boardHash(before),
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      decidedAt: null,
-      before: normalizeBoard(before),
-      after: normalizeBoard(after),
-    };
-    await writeJsonAtomic(proposalPath(proposalId), record);
-    await prune();
-    return stripPayload(record);
+      createdAt: now().toISOString(),
+    });
+    prune();
+    return toProposal(repository.get(row.approvalId, { includePayload: false }), { includePayload: false });
   }
 
-  async function get(proposalId, { includePayload = true } = {}) {
-    const record = await readJson(proposalPath(proposalId));
-    if (!record) return null;
-    return includePayload ? record : stripPayload(record);
+  function get(proposalId, { includePayload = true } = {}) {
+    const id = requireProposalId(proposalId);
+    const row = repository.get(id, { includePayload });
+    if (!row || row.kind !== BOARD_CHANGE_KIND || row.accountId !== accountId) return null;
+    return toProposal(row, { includePayload });
   }
 
-  async function list({ status, accountId, includePayload = false } = {}) {
-    const ids = (await listIds(proposalsDir())).map((name) => name.slice(0, -".json".length));
-    const records = [];
-    for (const id of ids) {
-      const record = await readJson(path.join(proposalsDir(), `${id}.json`));
-      if (!record) continue;
-      if (status && record.status !== status) continue;
-      if (accountId && record.accountId !== accountId) continue;
-      records.push(includePayload ? record : stripPayload(record));
-    }
-    return records.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  function list({ status, accountId: filterAccountId, includePayload = false } = {}) {
+    const rows = repository.list({ kind: BOARD_CHANGE_KIND, status, accountId: filterAccountId, includePayload });
+    return rows
+      .filter((row) => row.accountId === accountId)
+      .map((row) => toProposal(row, { includePayload }));
   }
 
-  async function decide(proposalId, decision) {
+  function decide(proposalId, decision) {
     if (!["approved", "rejected"].includes(decision)) throw new Error("Invalid proposal decision.");
-    const record = await get(proposalId);
+    const record = get(proposalId, { includePayload: false });
     if (!record) throw new Error("Proposal not found.");
     if (record.status !== "pending") throw new Error(`Proposal already ${record.status}.`);
-    const decided = { ...record, status: decision, decidedAt: new Date().toISOString() };
-    await writeJsonAtomic(proposalPath(proposalId), decided);
-    return stripPayload(decided);
+    const row = repository.decide(record.proposalId, decision, { decidedAt: now().toISOString() });
+    return toProposal(row, { includePayload: false });
   }
 
-  async function remove(proposalId) {
-    try {
-      await fsApi.unlink(proposalPath(proposalId));
-      return true;
-    } catch (error) {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    }
+  function remove(proposalId) {
+    const id = requireProposalId(proposalId);
+    const record = get(id, { includePayload: false });
+    if (!record) return false;
+    return repository.remove(record.proposalId);
   }
 
-  async function prune({ now = Date.now() } = {}) {
-    const proposals = await list({ includePayload: false });
-    const expired = proposals.filter((record) => record.status !== "pending" || now - new Date(record.createdAt).getTime() > ttlMs);
-    const pending = proposals.filter((record) => !expired.includes(record));
-    const overflow = pending.slice(0, Math.max(0, pending.length - maxProposals));
-    for (const record of [...expired, ...overflow]) {
-      await remove(record.proposalId).catch(() => undefined);
-    }
-    return { removed: expired.length + overflow.length, kept: proposals.length - expired.length - overflow.length };
+  function snapshotBoard(board, { label = "before-change", now: snapshotTime = now() } = {}) {
+    const safeLabel = String(label).replace(/[^A-Za-z0-9-]/g, "-").slice(0, 40) || "snapshot";
+    const createdAt = snapshotTime.toISOString();
+    const snapshotId = `snapshot-${createdAt.replace(/[:.]/g, "-")}-${safeLabel}`;
+    const inserted = repository.addSnapshot({
+      snapshotId,
+      accountId,
+      kind: BOARD_SNAPSHOT_KIND,
+      label: safeLabel,
+      payload: normalizeBoard(board),
+      createdAt,
+    }).snapshotId;
+    prune();
+    return inserted;
   }
 
-  async function snapshotBoard(board, { label = "before-change", now = new Date() } = {}) {
-    const safeLabel = String(label).replace(/[^A-Za-z0-9-]/g, "-").slice(0, 60) || "snapshot";
-    const stamp = now.toISOString().replace(/[:.]/g, "-");
-    const fileName = `board-${stamp}-${safeLabel}.json`;
-    const filePath = path.join(historyDir(), fileName);
-    await writeJsonAtomic(filePath, normalizeBoard(board));
-    const files = await listIds(historyDir());
-    const stale = files.slice(0, Math.max(0, files.length - maxSnapshots));
-    for (const name of stale) await fsApi.unlink(path.join(historyDir(), name)).catch(() => undefined);
-    return filePath;
+  function listSnapshots({ includePayload = false, limit } = {}) {
+    return repository.listSnapshots({ accountId, kind: BOARD_SNAPSHOT_KIND, includePayload, limit });
   }
 
-  return { stage, get, list, decide, remove, prune, snapshotBoard, proposalsDir, historyDir };
+  return {
+    stage,
+    get,
+    list,
+    decide,
+    remove,
+    prune,
+    snapshotBoard,
+    listSnapshots,
+    accountId,
+  };
 }

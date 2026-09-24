@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildAgentMemory } from "../../src/agentMemory.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
+import { createContextCache } from "./contextCache.js";
 import { streamOpenAIChat } from "../openAiStream.js";
 import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
 import { completeChatWithTools } from "../agentChatCompletion.js";
@@ -62,15 +63,16 @@ async function askOpenAI({ apiKey, model, baseUrl, messages, tools, runTool, com
   }
 }
 
-export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools } = {}) {
+export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools, contextCacheFactory = createContextCache } = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
-  const contexts = new Map();
+  const contexts = contextCacheFactory();
 
   function authenticated(request) {
     const sessionId = sessionFrom(request);
     const account = accountStore.getAccountForSession(sessionId);
     if (!account) throw Object.assign(new Error("Authentication required."), { statusCode: 401 });
+    contexts.sweep();
     let context = contexts.get(account.accountId);
     if (!context) {
       context = accountContextFactory({ account, accountsDir: path.join(dataDir, "accounts") });
@@ -203,7 +205,7 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     server,
     listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(config.httpPort, config.bindHost, () => resolve(server.address())); }),
     close: async () => {
-      await Promise.all([...contexts.values()].map((context) => context.close()));
+      await contexts.closeAll();
       accountStore.close();
       if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     },

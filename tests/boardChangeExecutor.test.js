@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,21 +8,26 @@ import { createBoardStorage } from "../electron/boardStorage.js";
 import { diffBoards } from "../electron/agent/boardDiff.js";
 import { planBoardChange } from "../electron/agent/boardChangePlanner.js";
 import { normalizeBoard, buildTask } from "../src/progressCore.js";
+import { openAccountDatabase } from "../electron/db/index.js";
 
 const NOW = new Date("2026-05-20T10:00:00.000Z");
 
 describe("board change executor", () => {
   let tempDir;
+  let database;
 
   afterEach(async () => {
+    database?.close();
+    database = undefined;
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = undefined;
   });
 
   async function setup() {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-executor-"));
+    database = openAccountDatabase({ dataDir: tempDir });
     const boardStorage = createBoardStorage({ dataDir: tempDir });
-    const changeStore = createBoardChangeStore({ dataDir: tempDir });
+    const changeStore = createBoardChangeStore({ connection: database, accountId: "account-a" });
     const executor = createBoardChangeExecutor({ boardStorage, changeStore });
     await boardStorage.writeBoard(normalizeBoard({ tasks: [buildTask("考研", { x: 1, y: 2 }, NOW)] }));
 
@@ -56,7 +61,7 @@ describe("board change executor", () => {
 
     const applied = await boardStorage.readBoard();
     expect(applied.tasks[0].nodes).toHaveLength(3);
-    expect(await readdir(changeStore.historyDir())).toHaveLength(1);
+    expect(changeStore.listSnapshots()).toHaveLength(1);
   });
 
   it("refuses to apply when the board changed after the proposal was staged", async () => {

@@ -7,6 +7,7 @@ const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 export const MIGRATIONS = Object.freeze([
   { version: 1, name: "base", file: "0001-base.sql" },
+  { version: 2, name: "approvals", file: "0002-approvals.sql" },
 ]);
 
 export class MigrationError extends Error {

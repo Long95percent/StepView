@@ -42,7 +42,8 @@ describe("gateway tool wiring", () => {
     expect(names).toContain("board.propose_change");
     expect(names).toContain("board.get_current_state");
     expect(context.dataDir).toBe(path.join(tempDir, ACCOUNT_ID));
-    expect(context.boardChangeStore.proposalsDir()).toBe(path.join(tempDir, ACCOUNT_ID, "proposals"));
+    expect(context.database.dbPath).toBe(path.join(tempDir, ACCOUNT_ID, "stepview.sqlite"));
+    expect(context.boardChangeStore.accountId).toBe(ACCOUNT_ID);
   });
 
   it("runs the full propose, review and approve loop through the shared tool bridge", async () => {

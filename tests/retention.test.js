@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createConnection } from "../electron/db/connection.js";
-import { RETENTION_RULES, listRetentionRuns, runRetention, validateRetentionRules } from "../electron/db/retention.js";
+import {
+  RETENTION_RULES,
+  buildApprovalRetentionRules,
+  buildSnapshotRetentionRules,
+  listRetentionRuns,
+  runRetention,
+  validateRetentionRules,
+} from "../electron/db/retention.js";
 
 const NOW = new Date("2026-09-24T00:00:00.000Z");
 const quiet = { warn: () => {} };
@@ -27,9 +34,20 @@ function ids(connection, table, column) {
 }
 
 describe("retention rules", () => {
-  it("ships an empty rule set until the tables exist", () => {
-    expect(RETENTION_RULES).toEqual([]);
+  it("ships a valid default rule set covering approvals and snapshots", () => {
+    expect(RETENTION_RULES.map((rule) => rule.id)).toEqual([
+      "approvals-expired:board_change",
+      "approvals-overflow:board_change",
+      "snapshots-overflow:board",
+    ]);
     expect(validateRetentionRules(RETENTION_RULES)).toBe(RETENTION_RULES);
+  });
+
+  it("builds parameterised approval and snapshot rules for one store", () => {
+    expect(buildApprovalRetentionRules({ kind: "board_change", maxPending: 3, ttlDays: 2 }).map((rule) => rule.keep?.limit ?? null)).toEqual([null, 3]);
+    expect(buildSnapshotRetentionRules({ kind: "board", maxSnapshots: 4 })[0].keep.limit).toBe(4);
+    expect(() => buildApprovalRetentionRules({ kind: "bad kind" })).toThrow(/非法的审批类型/);
+    expect(() => buildSnapshotRetentionRules({ kind: "bad-kind" })).toThrow(/非法的快照类型/);
   });
 
   it("rejects malformed rules", () => {

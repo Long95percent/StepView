@@ -56,7 +56,6 @@ const RULES = [
 const DEBT = [
   { file: "electron/preflight.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], permanent: true, reason: "环境自检探针，需要真实探测 SQLite 可写与驱动可用" },
   { file: "electron/redisManager.js", rules: ["fs-write"], permanent: true, reason: "负责探测与拉起本机 Redis 进程" },
-  { file: "electron/agent/boardChangeStore.js", rules: ["fs-write"], removeIn: "Phase 1", reason: "提案与快照仍是文件目录，迁移后改为仓储" },
   { file: "electron/agentSqliteStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], removeIn: "Phase 2", reason: "独立的 Agent 会话库，合并进账号库后删除" },
   { file: "electron/agentMemorySqliteStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], removeIn: "Phase 2", reason: "独立的记忆库，合并进账号库后删除" },
   { file: "electron/agent/userProfileStore.js", rules: ["sqlite-driver", "raw-sql"], removeIn: "Phase 2", reason: "独立的画像库，合并进账号库后删除" },

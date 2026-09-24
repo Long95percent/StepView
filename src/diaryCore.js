@@ -6,6 +6,16 @@
  */
 
 export const DIARY_STATUSES = Object.freeze(["active", "archived", "trashed"]);
+/**
+ * 日记类型。
+ *
+ * daily —— 每日日记：节点关联可选（0..n），occurred_day 是它的主视图。
+ * node  —— 节点日记：必须关联至少一个节点，画布上 node.detail 的正身。
+ *
+ * 类型必须显式存下来，不能靠"有没有节点关联"推导：每日日记也可以关联节点，
+ * 所以"挂着节点"这件事本身区分不出两种日记。
+ */
+export const DIARY_KINDS = Object.freeze(["daily", "node"]);
 export const DIARY_TARGET_TYPES = Object.freeze(["node", "branch", "task"]);
 export const DIARY_LINK_ROLES = Object.freeze(["primary", "context", "evidence"]);
 export const DIARY_SOURCES = Object.freeze(["manual", "node-note-import", "agent"]);
@@ -109,7 +119,15 @@ export function normalizeDiaryInput(input = {}, { now = new Date() } = {}) {
   if (Number.isNaN(occurredAt.getTime())) throw new DiaryInputError(`时间格式不正确：${input.occurredAt}`, { field: "occurredAt" });
   const timezone = String(input.timezone || "UTC").trim() || "UTC";
 
+  const links = normalizeLinks(input.links);
+  const kind = input.kind === undefined ? "daily" : requireOneOf(input.kind, DIARY_KINDS, "kind");
+  // 节点日记必须挂在节点上；界面会在提交前拦一道，这里是共用纯函数的第二道。
+  if (kind === "node" && !links.some((link) => link.targetType === "node")) {
+    throw new DiaryInputError("节点日记必须关联至少一个节点。", { field: "links" });
+  }
+
   return {
+    kind,
     occurredAt: occurredAt.toISOString(),
     occurredDay: dayKeyFromInstant(occurredAt, timezone),
     timezone,
@@ -118,7 +136,7 @@ export function normalizeDiaryInput(input = {}, { now = new Date() } = {}) {
     status: input.status === undefined ? "active" : requireOneOf(input.status, DIARY_STATUSES, "status"),
     source: input.source === undefined ? "manual" : requireOneOf(input.source, DIARY_SOURCES, "source"),
     tags: normalizeTags(input.tags),
-    links: normalizeLinks(input.links),
+    links,
   };
 }
 

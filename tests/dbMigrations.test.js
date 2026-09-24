@@ -37,7 +37,11 @@ describe("database migrations", () => {
     expect(ordered.map((migration) => migration.version)).toEqual([...ordered.map((m) => m.version)].sort((a, b) => a - b));
     for (const migration of ordered) {
       expect(migration.name).toBeTruthy();
-      expect(loadMigrationSql(migration)).toContain("CREATE TABLE");
+      // 迁移不一定都是建表：加列、回填、建索引都算正常迁移。
+      // 这里只做冒烟检查——文件非空，且确实是 SQL 而不是一段说明文字。
+      const sql = loadMigrationSql(migration);
+      expect(sql.trim().length).toBeGreaterThan(0);
+      expect(sql).toMatch(/\b(CREATE TABLE|CREATE VIRTUAL TABLE|CREATE INDEX|ALTER TABLE|UPDATE)\b/);
     }
   });
 

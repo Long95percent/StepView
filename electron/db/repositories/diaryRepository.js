@@ -13,6 +13,21 @@ export class DiaryRevisionConflictError extends Error {
   }
 }
 
+/**
+ * 一条节点日记没有挂到任何节点上。
+ *
+ * 这是"输入不合法"，不是服务端故障，所以给 400 而不是 500。
+ */
+export class DiaryNodeLinkRequiredError extends Error {
+  constructor(message, { diaryId = null } = {}) {
+    super(message);
+    this.name = "DiaryNodeLinkRequiredError";
+    this.code = "DIARY_NODE_LINK_REQUIRED";
+    this.statusCode = 400;
+    this.diaryId = diaryId;
+  }
+}
+
 function makeId(prefix) {
   return `${prefix}-${randomUUID()}`;
 }
@@ -23,6 +38,7 @@ function entryFromRow(row, tags = []) {
     diaryId: row.id,
     accountId: row.account_id,
     rev: Number(row.rev),
+    kind: row.kind,
     occurredAt: row.occurred_at,
     occurredDay: row.occurred_day,
     timezone: row.timezone,
@@ -64,13 +80,13 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   const { db } = connection;
 
   const insertEntryStatement = db.prepare(`
-    INSERT INTO diary_entries (id, account_id, rev, occurred_at, occurred_day, timezone, title, content, status, source, created_at, updated_at, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO diary_entries (id, account_id, rev, kind, occurred_at, occurred_day, timezone, title, content, status, source, created_at, updated_at, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const selectEntryStatement = db.prepare("SELECT * FROM diary_entries WHERE id = ? AND account_id = ?");
   const updateEntryStatement = db.prepare(`
     UPDATE diary_entries
-    SET rev = ?, occurred_at = ?, occurred_day = ?, timezone = ?, title = ?, content = ?, status = ?, source = ?, updated_at = ?, deleted_at = ?
+    SET rev = ?, kind = ?, occurred_at = ?, occurred_day = ?, timezone = ?, title = ?, content = ?, status = ?, source = ?, updated_at = ?, deleted_at = ?
     WHERE id = ? AND account_id = ? AND rev = ?
   `);
   const deleteEntryStatement = db.prepare("DELETE FROM diary_entries WHERE id = ? AND account_id = ?");
@@ -89,6 +105,9 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   );
   const orphanLinksStatement = db.prepare(
     "UPDATE diary_links SET orphaned_at = ? WHERE account_id = ? AND target_type = ? AND target_id = ? AND orphaned_at IS NULL",
+  );
+  const countNodeLinksStatement = db.prepare(
+    "SELECT COUNT(*) AS count FROM diary_links WHERE diary_id = ? AND account_id = ? AND target_type = 'node'",
   );
 
   const selectTagsStatement = db.prepare(
@@ -192,6 +211,19 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   }
 
   /**
+   * 节点日记必须至少挂着一条节点关联。
+   *
+   * SQLite 跨表做不了 CHECK，触发器也只能在语句级别看单条 INSERT（那时候关联还没写），
+   * 所以放在同一个事务里、写完关联之后再查一次：不满足就抛错，让整笔回滚。
+   * 校验失败等于什么都没写，不会留下一条没有归属的节点日记。
+   */
+  function assertNodeDiaryHasNode(diaryId, kind) {
+    if (kind !== "node") return;
+    if (Number(countNodeLinksStatement.get(String(diaryId), accountId)?.count || 0) > 0) return;
+    throw new DiaryNodeLinkRequiredError("节点日记必须关联至少一个节点。", { diaryId });
+  }
+
+  /**
    * 新建一条日记。`normalized` 必须已经过 src/diaryCore.js 的 normalizeDiaryInput。
    */
   function create(normalized, { reason = "create", now = new Date() } = {}) {
@@ -201,6 +233,9 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       diaryId,
       accountId,
       rev: 1,
+      // 和表上的 DEFAULT 'daily' 保持一致：调用方没给类型就是每日日记，
+      // 不能因为少传一个字段就把整笔写入炸掉。
+      kind: normalized.kind ?? "daily",
       occurredAt: normalized.occurredAt,
       occurredDay: normalized.occurredDay,
       timezone: normalized.timezone,
@@ -219,6 +254,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
         diaryId,
         accountId,
         record.rev,
+        record.kind,
         record.occurredAt,
         record.occurredDay,
         record.timezone,
@@ -232,6 +268,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       );
       syncTags(diaryId, normalized.tags, nowIso);
       syncLinks(diaryId, normalized.links, nowIso);
+      assertNodeDiaryHasNode(diaryId, record.kind);
       insertFtsStatement.run(diaryId, accountId, record.title, record.content);
       appendRevision(diaryId, record.rev, { ...record, links: normalized.links }, { reason, now });
     });
@@ -264,6 +301,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       diaryId: String(id),
       accountId,
       rev: nextRev,
+      kind: normalized.kind ?? current.kind,
       occurredAt: normalized.occurredAt ?? current.occurred_at,
       occurredDay: normalized.occurredDay ?? current.occurred_day,
       timezone: normalized.timezone ?? current.timezone,
@@ -280,6 +318,7 @@ export function createDiaryRepository({ connection, accountId } = {}) {
     connection.withTransaction(() => {
       const info = updateEntryStatement.run(
         record.rev,
+        record.kind,
         record.occurredAt,
         record.occurredDay,
         record.timezone,
@@ -302,6 +341,8 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       }
       if (normalized.tags) syncTags(record.diaryId, normalized.tags, nowIso);
       if (normalized.links) syncLinks(record.diaryId, normalized.links, nowIso);
+      // 放在 syncLinks 之后：把节点日记的最后一条节点关联解绑掉，会在这里被拦下并整笔回滚。
+      assertNodeDiaryHasNode(record.diaryId, record.kind);
       updateFtsStatement.run(record.title, record.content, record.diaryId);
       appendRevision(record.diaryId, record.rev, record, { reason, now });
     });
@@ -347,6 +388,10 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       );
       params.push(String(filter.tag));
     }
+    if (filter.kind) {
+      clauses.push("AND kind = ?");
+      params.push(String(filter.kind));
+    }
     if (filter.targetType && filter.targetId) {
       clauses.push(
         "AND id IN (SELECT diary_id FROM diary_links WHERE account_id = ? AND target_type = ? AND target_id = ?)",
@@ -366,8 +411,8 @@ export function createDiaryRepository({ connection, accountId } = {}) {
   }
 
   /** 把所有日记的正文拼成一份"哪一天写了什么"的时间线，供 Agent 读。 */
-  function timeline({ limit = 50, from = null, to = null } = {}) {
-    return list({ limit, from, to }).map((entry) => ({
+  function timeline({ limit = 50, from = null, to = null, kind = null } = {}) {
+    return list({ limit, from, to, kind }).map((entry) => ({
       diaryId: entry.diaryId,
       occurredDay: entry.occurredDay,
       title: entry.title,
@@ -415,6 +460,10 @@ export function createDiaryRepository({ connection, accountId } = {}) {
       params.push(String(filter.tag));
     }
     // 和 list 保持同一套筛选：调用方按天/按节点筛的时候不该只有 list 生效。
+    if (filter.kind) {
+      clauses.push("AND e.kind = ?");
+      params.push(String(filter.kind));
+    }
     if (filter.from) {
       clauses.push("AND e.occurred_day >= ?");
       params.push(String(filter.from));

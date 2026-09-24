@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openAccountDatabase } from "../electron/db/index.js";
-import { DiaryRevisionConflictError, createDiaryRepository } from "../electron/db/repositories/diaryRepository.js";
+import {
+  DiaryNodeLinkRequiredError,
+  DiaryRevisionConflictError,
+  createDiaryRepository,
+} from "../electron/db/repositories/diaryRepository.js";
 import { normalizeDiaryInput } from "../src/diaryCore.js";
 
 const NOW = new Date("2026-09-24T10:00:00.000Z");
@@ -190,5 +194,127 @@ describe("diary repository", () => {
     const [item] = diary.timeline();
     expect(item).toMatchObject({ occurredDay: "2026-09-24", title: "我的记录", tags: [] });
     expect(item.summary.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a node diary with no node link and rolls the whole write back", () => {
+    // 故意绕过 diaryCore 的校验直接构造：界面/纯函数是第一道防线，仓储必须自己再拦一次，
+    // 否则任何绕过 normalizeDiaryInput 的调用方都能塞进一条没有归属的节点日记。
+    const orphan = { ...entry({ content: "一条没有归属的节点日记" }), kind: "node" };
+
+    expect(() => diary.create(orphan)).toThrow(DiaryNodeLinkRequiredError);
+    // 整笔回滚：条目、全文索引、变更日志一个字都不该留下。
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_entries").get().count).toBe(0);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_fts").get().count).toBe(0);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_revisions").get().count).toBe(0);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM diary_links").get().count).toBe(0);
+  });
+
+  it("refuses to unlink the last node from a node diary", () => {
+    const created = diary.create(
+      entry({
+        content: "挂在节点上的记录",
+        kind: "node",
+        links: [
+          { targetType: "node", targetId: "node-1", role: "primary" },
+          { targetType: "task", targetId: "task-1" },
+        ],
+      }),
+    );
+    expect(created.kind).toBe("node");
+
+    // 改成只关联任务：节点关联被摘掉，这条节点日记就没有归属了，必须拒绝并整笔回滚。
+    // diaryCore 会在界面那一层先拦一次，所以这里绕过它，单独验证仓储这道防线——
+    // 少了任何一层，调用方都能把一条节点日记改成没有归属的孤儿。
+    const taskOnly = {
+      ...entry({ content: "改成只关联任务", links: [{ targetType: "task", targetId: "task-1" }] }),
+      kind: "node",
+    };
+    expect(() => diary.update(created.diaryId, taskOnly, { expectedRev: created.rev })).toThrow(DiaryNodeLinkRequiredError);
+
+    expect(diary.get(created.diaryId)).toMatchObject({ rev: 1, content: "挂在节点上的记录", kind: "node" });
+    expect(diary.listLinks(created.diaryId).map((link) => link.targetType).sort()).toEqual(["node", "task"]);
+
+    // 保留节点关联的前提下把别的关联换掉，是允许的。
+    const updated = diary.update(
+      created.diaryId,
+      entry({
+        content: "换个任务关联",
+        kind: "node",
+        links: [
+          { targetType: "node", targetId: "node-1", role: "primary" },
+          { targetType: "task", targetId: "task-2" },
+        ],
+      }),
+      { expectedRev: created.rev },
+    );
+    expect(updated.rev).toBe(2);
+    expect(diary.listLinks(created.diaryId).map((link) => link.targetId).sort()).toEqual(["node-1", "task-2"]);
+  });
+
+  it("filters list, search and timeline by kind", () => {
+    const daily = diary.create(entry({ title: "每日记录", content: "今天在写界面", occurredAt: "2026-09-24T02:00:00.000Z" }));
+    const nodeDiary = diary.create(
+      entry({
+        title: "节点记录",
+        content: "这个节点上的实现细节",
+        occurredAt: "2026-09-24T01:00:00.000Z",
+        kind: "node",
+        links: [{ targetType: "node", targetId: "node-1", role: "primary" }],
+      }),
+    );
+
+    // 默认是每日日记，老调用方不需要改。
+    expect(daily.kind).toBe("daily");
+    expect(nodeDiary.kind).toBe("node");
+
+    expect(diary.list({ kind: "daily" }).map((item) => item.diaryId)).toEqual([daily.diaryId]);
+    expect(diary.list({ kind: "node" }).map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
+    expect(diary.list({}).map((item) => item.diaryId)).toEqual([daily.diaryId, nodeDiary.diaryId]);
+
+    expect(diary.search({ query: "写界面", kind: "daily" }).map((item) => item.diaryId)).toEqual([daily.diaryId]);
+    expect(diary.search({ query: "实现细节", kind: "node" }).map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
+    expect(diary.search({ query: "实现细节", kind: "daily" })).toEqual([]);
+
+    expect(diary.timeline({ kind: "node" }).map((item) => item.diaryId)).toEqual([nodeDiary.diaryId]);
+    expect(diary.timeline().map((item) => item.diaryId)).toEqual([daily.diaryId, nodeDiary.diaryId]);
+  });
+
+  it("never leaves a node diary without a node link, across the whole database", () => {
+    // 全库不变量：任何写入路径都不该产出一条没有归属的节点日记。
+    // 单点测试只能覆盖走过的路径，这条扫描是用来兜住"将来新增的写入路径忘了校验"的。
+    diary.create(entry({ content: "普通的一天" }));
+    diary.create(entry({ content: "挂在节点上", kind: "node", links: [{ targetType: "node", targetId: "node-1" }] }));
+    const nodeDiary = diary.create(
+      entry({ content: "两个节点上", kind: "node", links: [{ targetType: "node", targetId: "node-2" }, { targetType: "node", targetId: "node-3" }] }),
+    );
+    // 顺带把"归档 / 回收站 / 编辑"这几条路径也走一遍。
+    diary.update(nodeDiary.diaryId, entry({ content: "改了内容", kind: "node", links: diary.listLinks(nodeDiary.diaryId).map(({ targetType, targetId, role }) => ({ targetType, targetId, role })) }), {
+      expectedRev: nodeDiary.rev,
+    });
+    diary.setStatus(nodeDiary.diaryId, "trashed");
+    diary.setStatus(nodeDiary.diaryId, "active");
+
+    const strays = database.db
+      .prepare(
+        `SELECT e.id AS id FROM diary_entries e
+         WHERE e.kind = 'node'
+           AND NOT EXISTS (
+             SELECT 1 FROM diary_links l
+             WHERE l.diary_id = e.id AND l.target_type = 'node'
+           )`,
+      )
+      .all();
+
+    expect(strays).toEqual([]);
+    // 确认扫描本身是有效的：真的塞一条孤儿进去，它必须被抓出来。
+    database.db
+      .prepare("INSERT INTO diary_entries (id, account_id, rev, kind, occurred_at, occurred_day, timezone, title, content, status, source, created_at, updated_at) VALUES (?, ?, 1, 'node', ?, ?, 'UTC', '', '孤儿', 'active', 'manual', ?, ?)")
+      .run("diary-stray", "account-a", NOW.toISOString(), "2026-09-24", NOW.toISOString(), NOW.toISOString());
+    expect(
+      database.db
+        .prepare("SELECT id FROM diary_entries e WHERE e.kind = 'node' AND NOT EXISTS (SELECT 1 FROM diary_links l WHERE l.diary_id = e.id AND l.target_type = 'node')")
+        .all()
+        .map((row) => row.id),
+    ).toEqual(["diary-stray"]);
   });
 });

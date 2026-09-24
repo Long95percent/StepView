@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DIARY_KINDS,
   DIARY_TAG_LIMIT,
   DiaryInputError,
   dayKeyFromInstant,
@@ -56,6 +57,26 @@ describe("diary core", () => {
     expect(() => normalizeDiaryInput({ content: "ok", source: "telepathy" }, { now: NOW })).toThrow(/source/);
     expect(() => normalizeDiaryInput({ content: "ok", links: [{ targetType: "moon", targetId: "1" }] }, { now: NOW })).toThrow(/关联目标类型/);
     expect(() => normalizeDiaryInput({ content: "ok", occurredAt: "昨天" }, { now: NOW })).toThrow(/时间格式/);
+  });
+
+  it("keeps daily and node diaries apart, and makes node diaries carry a node link", () => {
+    // 不给 kind 时默认是每日日记：老调用方不需要改。
+    expect(normalizeDiaryInput({ content: "随手记一句" }, { now: NOW }).kind).toBe("daily");
+    expect(DIARY_KINDS).toEqual(["daily", "node"]);
+
+    // 每日日记可以关联节点，也可以不关联。
+    expect(normalizeDiaryInput({ content: "今天的记录", kind: "daily", links: [{ targetType: "node", targetId: "node-1" }] }, { now: NOW }).kind).toBe("daily");
+    expect(normalizeDiaryInput({ content: "今天的记录", kind: "daily" }, { now: NOW }).links).toEqual([]);
+
+    // 节点日记必须挂在节点上。
+    expect(
+      normalizeDiaryInput({ content: "节点上的记录", kind: "node", links: [{ targetType: "node", targetId: "node-1" }] }, { now: NOW }).kind,
+    ).toBe("node");
+    expect(() => normalizeDiaryInput({ content: "节点上的记录", kind: "node" }, { now: NOW })).toThrow(/必须关联至少一个节点/);
+    // 只关联任务/支线不算：节点日记要的是节点。
+    expect(() => normalizeDiaryInput({ content: "节点上的记录", kind: "node", links: [{ targetType: "task", targetId: "task-1" }] }, { now: NOW })).toThrow(/必须关联至少一个节点/);
+
+    expect(() => normalizeDiaryInput({ content: "ok", kind: "weekly" }, { now: NOW })).toThrow(/kind/);
   });
 
   it("uses the injected clock when no time is given", () => {

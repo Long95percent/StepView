@@ -24,7 +24,9 @@ import { normalizeBoard, buildTask } from "../src/progressCore.js";
 
 const NOW = new Date("2026-09-24T10:00:00.000Z");
 const SILENT = { info() {}, warn() {} };
-const SUPPORTED = { global: 1, account: 8 };
+// 跟迁移走，而不是写死数字：每加一次迁移都要回来改测试是没必要的维护成本。
+const CURRENT_ACCOUNT_VERSION = MIGRATIONS.at(-1).version;
+const SUPPORTED = { global: 1, account: CURRENT_ACCOUNT_VERSION };
 const REQUIRED = { global: GLOBAL_REQUIRED_TABLES, account: ACCOUNT_REQUIRED_TABLES };
 
 describe("database archive", () => {
@@ -82,7 +84,7 @@ describe("database archive", () => {
     expect(fs.existsSync(path.join(targetDir, "stepview.sqlite"))).toBe(true);
 
     const account = result.manifest.databases[1];
-    expect(account.schemaVersion).toBe(8);
+    expect(account.schemaVersion).toBe(CURRENT_ACCOUNT_VERSION);
     const rowsOf = (name) => account.tables.find((table) => table.name === name)?.rows;
     expect(rowsOf("board_documents")).toBe(1);
     expect(rowsOf("approvals")).toBe(1);
@@ -132,7 +134,7 @@ describe("database archive", () => {
     const report = inspectArchive({ dir: targetDir, expectedSchemaVersion: SUPPORTED, requiredTables: REQUIRED });
     expect(report.problems).toEqual([]);
     expect(report.ok).toBe(true);
-    expect(report.databases[1]).toMatchObject({ name: "account", actual: { schemaVersion: 8 } });
+    expect(report.databases[1]).toMatchObject({ name: "account", actual: { schemaVersion: CURRENT_ACCOUNT_VERSION } });
   });
 
   it("reports every problem it finds instead of stopping at the first one", async () => {
@@ -213,7 +215,7 @@ describe("database archive", () => {
     const reopened = openAccountDatabase({ dataDir: restoredDir });
     opened.push(reopened);
     expect(createBoardRepository({ connection: reopened }).readBoard().tasks[0].title).toBe("老备份");
-    expect(reopened.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version).toBe(8);
+    expect(reopened.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version).toBe(CURRENT_ACCOUNT_VERSION);
   });
 
   it("checks a backup without touching a single byte of it", async () => {

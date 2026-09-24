@@ -264,6 +264,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
           occurredAt: item.occurredAt,
           timezone,
           source: "node-note-import",
+          // 导入出来的就是节点日记。必须和 0009 迁移的回填口径一致，
+          // 否则"历史导入的是节点日记、新导入的却是每日日记"会当场自相矛盾。
+          kind: "node",
           links: [{ targetType: "node", targetId: item.nodeId, taskId: item.taskId, role: "primary", createdBy: "user" }],
         }),
         { reason: "import-node-note", now: now() },

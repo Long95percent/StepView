@@ -121,6 +121,8 @@ describe("diary service", () => {
     const entries = service.list({ status: "all" });
     expect(entries).toHaveLength(2);
     expect(entries.every((entry) => entry.source === "node-note-import")).toBe(true);
+    // 导入出来的就是节点日记，必须和 0009 迁移的回填口径一致。
+    expect(entries.every((entry) => entry.kind === "node")).toBe(true);
     expect(entries[0].links).toBeUndefined();
     expect(service.get(entries[0].diaryId).links[0]).toMatchObject({ targetType: "node", targetId: "node-4", role: "primary" });
 

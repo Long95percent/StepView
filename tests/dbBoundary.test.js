@@ -56,7 +56,6 @@ const RULES = [
 const DEBT = [
   { file: "electron/preflight.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], permanent: true, reason: "环境自检探针，需要真实探测 SQLite 可写与驱动可用" },
   { file: "electron/redisManager.js", rules: ["fs-write"], permanent: true, reason: "负责探测与拉起本机 Redis 进程" },
-  { file: "electron/gateway/accountStore.js", rules: ["sqlite-driver", "fs-write", "raw-sql", "raw-delete"], removeIn: "Phase 4", reason: "全局库仍是手写建表，改为迁移器管理" },
   { file: "electron/agentJournalStorage.js", rules: ["fs-write"], removeIn: "Phase 4", reason: "已被 Agent SQLite 库取代的死代码，待删除" },
   { file: "electron/agent/knowledgeBaseRegistry.js", rules: ["fs-write"], removeIn: "Phase 4", reason: "知识库用 JSON 目录，迁入表与 blobs 后删除" },
   { file: "src/main.jsx", rules: ["plaintext-password"], removeIn: "Phase 5", reason: "浏览器模式把明文密码写进了 localStorage" },

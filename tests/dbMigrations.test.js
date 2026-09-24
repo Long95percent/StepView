@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConnection } from "../electron/db/connection.js";
 import {
+  GLOBAL_MIGRATIONS,
   MIGRATIONS,
   checksumSql,
   loadMigrationSql,
@@ -11,7 +12,7 @@ import {
   runMigrations,
   sortMigrations,
 } from "../electron/db/migrations/index.js";
-import { openAccountDatabase } from "../electron/db/index.js";
+import { openAccountDatabase, openGlobalDatabase } from "../electron/db/index.js";
 
 const NOW = () => "2026-09-24T00:00:00.000Z";
 
@@ -144,6 +145,25 @@ describe("database migrations", () => {
     const reopened = createConnection({ dbPath });
     expect(reopened.tableExists("partial")).toBe(false);
     expect(reopened.tableExists("schema_migrations")).toBe(false);
+    reopened.close();
+  });
+
+  it("opens the gateway database with its own migration set", () => {
+    for (const migration of GLOBAL_MIGRATIONS) expect(loadMigrationSql(migration)).toContain("CREATE TABLE");
+
+    const db = openGlobalDatabase({ dataDir: tempDir });
+    expect(db.dbPath.endsWith("gateway.sqlite")).toBe(true);
+    expect(db.tableExists("accounts")).toBe(true);
+    expect(db.tableExists("sessions")).toBe(true);
+    expect(db.tableExists("gateway_settings")).toBe(true);
+    expect(db.tableExists("retention_runs")).toBe(true);
+    // 账号库的表不能跑到全局库里来，两个库的迁移集合是分开的。
+    expect(db.tableExists("kv")).toBe(false);
+    expect(db.tableExists("approvals")).toBe(false);
+    db.close();
+
+    const reopened = openGlobalDatabase({ dataDir: tempDir });
+    expect(listAppliedMigrations(reopened).map((row) => row.version)).toEqual(GLOBAL_MIGRATIONS.map((migration) => migration.version));
     reopened.close();
   });
 });

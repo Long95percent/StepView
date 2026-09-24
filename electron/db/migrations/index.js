@@ -5,6 +5,17 @@ import { fileURLToPath } from "node:url";
 
 const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * 全局库（gateway.sqlite）的迁移。
+ *
+ * 和账号库分开：账号库里那张保留策略记录表属于账号数据，全局库只需要账号、会话、设置
+ * 和它自己的清理记录。两个库各自维护 schema_migrations，互不影响。
+ */
+export const GLOBAL_MIGRATIONS = Object.freeze([
+  { version: 1, name: "global", file: "0001-global.sql" },
+]);
+
+/** 账号库（stepview.sqlite）的迁移。只能追加，不能修改已经发布过的文件。 */
 export const MIGRATIONS = Object.freeze([
   { version: 1, name: "base", file: "0001-base.sql" },
   { version: 2, name: "approvals", file: "0002-approvals.sql" },

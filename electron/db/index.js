@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createConnection } from "./connection.js";
-import { MIGRATIONS, runMigrations } from "./migrations/index.js";
+import { GLOBAL_MIGRATIONS, MIGRATIONS, runMigrations } from "./migrations/index.js";
 import { createBackupManager } from "./backup.js";
 import { importLegacyData } from "./legacyImport.js";
 
@@ -27,9 +27,9 @@ function openDatabase({ dbPath, dataDir, fsApi, migrations, now, migrate = true,
   };
 }
 
-export function openGlobalDatabase({ dataDir, ...options } = {}) {
+export function openGlobalDatabase({ dataDir, dbPath, migrations = GLOBAL_MIGRATIONS, ...options } = {}) {
   if (!dataDir) throw new Error("openGlobalDatabase requires a dataDir.");
-  return openDatabase({ ...options, dataDir, dbPath: path.join(dataDir, GLOBAL_DB_FILE) });
+  return openDatabase({ ...options, dataDir, dbPath: dbPath || path.join(dataDir, GLOBAL_DB_FILE), migrations });
 }
 
 export function openAccountDatabase({ dataDir, importLegacy = true, ...options } = {}) {
@@ -37,4 +37,4 @@ export function openAccountDatabase({ dataDir, importLegacy = true, ...options }
   return openDatabase({ ...options, dataDir, importLegacy, dbPath: path.join(dataDir, ACCOUNT_DB_FILE) });
 }
 
-export { createConnection, createBackupManager, importLegacyData, MIGRATIONS, runMigrations };
+export { createConnection, createBackupManager, importLegacyData, GLOBAL_MIGRATIONS, MIGRATIONS, runMigrations };

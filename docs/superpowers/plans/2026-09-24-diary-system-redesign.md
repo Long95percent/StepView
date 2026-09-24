@@ -295,20 +295,39 @@ diary: { list, get, create, update, trash, restore, remove,
 
 每个阶段独立提交、独立可验证、可随时停下。前一个阶段不完成不开下一个。
 
-### Phase 1：数据模型加 `kind` 与不变量约束（落实 D4、D5、N7）
+### Phase 1：数据模型加 `kind` 与不变量约束（落实 D4、D5、N7）✅ 已完成
 
-- [ ] 迁移 `electron/db/migrations/0009-diary-kind.sql`：加 `kind` 列与 `idx_diary_kind` 索引。
-- [ ] 回填：只把 `source='node-note-import'` 的条目判为 `node`，其余留 `daily`。
+- [x] 迁移 `electron/db/migrations/0009-diary-kind.sql`：加 `kind` 列（`NOT NULL DEFAULT 'daily'`）与 `idx_diary_kind` 索引。
+- [x] 回填：只把 `source='node-note-import'` 的条目判为 `node`，其余留 `daily`。
       **不根据"有没有节点关联"回填**——那会把"某天顺手关联了节点"的每日日记误判成节点日记，
       而误判成 `node` 会让它从日记板块主视图消失，属于对用户数据的静默破坏。
-- [ ] `src/diaryCore.js`：新增 `DIARY_KINDS = ['daily','node']`；`normalizeDiaryInput` 校验 `kind`，
-      并在 `kind='node'` 且没有任何 node 关联时抛 `DiaryInputError`。
-- [ ] `electron/db/repositories/diaryRepository.js`：`create` / `update` / `syncLinks` 全部带上 `kind`；
-      事务内做"node 必须 ≥1 关联"的校验；解绑最后一条节点关联时报错回滚。
-- [ ] `list` / `search` / `timeline` 支持按 `kind` 过滤。
-- [ ] 测试：`tests/diaryCore.test.js` 补 kind 校验；`tests/diaryRepository.test.js` 补
-      "node 无关联必须报错并回滚""解绑最后一条被拒""按 kind 过滤"。
-- [ ] 验证：`npm test` 全绿。
+- [x] `src/diaryCore.js`：新增 `DIARY_KINDS = ['daily','node']`；`normalizeDiaryInput` 校验 `kind`，
+      并在 `kind='node'` 且没有任何 node 关联时抛 `DiaryInputError`（界面那一道防线）。
+- [x] `electron/db/repositories/diaryRepository.js`：`create` / `update` 带上 `kind`；
+      新增 `DiaryNodeLinkRequiredError`（`statusCode` 400），在同一个事务里、写完关联之后校验
+      "node 必须 ≥1 节点关联"；把节点日记的最后一条节点关联解绑掉会被拦下并整笔回滚（仓储那一道防线）。
+      `create` 对缺省 `kind` 回落 `daily`，与表上的 `DEFAULT` 保持一致。
+- [x] `list` / `search` / `timeline` 支持按 `kind` 过滤。
+- [x] 测试：`tests/diaryCore.test.js` 补 kind 校验（含"只关联任务不算节点日记"）；
+      `tests/diaryRepository.test.js` 补"node 无关联必须报错并整笔回滚""解绑最后一条被拒"
+      "按 kind 过滤"，以及**全库不变量扫描**（顺带验证扫描本身有效：塞一条孤儿必须被抓出来）。
+
+**计划外但必须一起做的两件事**
+
+- `electron/diaryService.js` 的 `importNodeNotes` 补上 `kind: "node"`。
+  原计划把它放在 Phase 5，但迁移已经声明了"`source='node-note-import'` 即节点日记"，
+  服务层却还在产出 `daily` —— 会当场自相矛盾（历史导入的是节点日记、新导入的却是每日日记）。所以提前到本阶段。
+- 修掉两个被这次改动打破的既有测试假设：
+  `tests/dbMigrations.test.js` 原断言"每个迁移都必须含 `CREATE TABLE`"（加列迁移不成立），
+  改为冒烟检查 SQL 非空；`tests/dbArchive.test.js` 把账号库 schema 版本写死成 8，
+  改为从 `MIGRATIONS` 推导，免得以后每加一次迁移都要回来改。
+
+**验证**
+
+- 52 个测试文件 310 个用例全绿（本阶段从 305 涨到 310），`npm run build` 通过。
+- 用真实账号库的副本（`VACUUM`/backup 快照，v8 → v9）验证升级路径：
+  `kind` 列与索引按预期建出、`board_documents` 与 `approvals` 数据原样保留、
+  二次运行 `applied` 为空（幂等）、篡改 `schema_migrations` 校验和被拒（`MIGRATION_MODIFIED`）。
 
 ### Phase 2：业务层与双通道对齐（前端开工的前提）（落实 D3）
 
@@ -351,7 +370,7 @@ diary: { list, get, create, update, trash, restore, remove,
 
 - [ ] 复用现有 `previewNodeNoteImport` / `importNodeNotes` 的**非破坏**模式：
       先预览、显式确认、**`node.detail` 原文一个字都不删**、幂等（已导过的节点不再重复导）。
-- [ ] 导入产生的条目改为 `kind='node'`（现在是 `source='node-note-import'` 的普通条目）。
+- [x] 导入产生的条目改为 `kind='node'` —— **已在 Phase 1 提前完成**，避免迁移回填口径与服务层产出互相矛盾。
 - [ ] 导入入口放在节点日记区，做成一个明确的按钮 + 预览弹窗，**不做自动导入**。
 - [ ] 导入完成后节点区以节点日记为准；`node.detail` 保留为画布字段，作为只读历史折叠展示。
 - [ ] 绝不做的事：不自动导入、不在用户没确认时改写画布、不删除任何 `detail` 文本。

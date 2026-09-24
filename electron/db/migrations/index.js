@@ -24,6 +24,7 @@ export const MIGRATIONS = Object.freeze([
   { version: 5, name: "profile", file: "0005-profile.sql" },
   { version: 6, name: "board", file: "0006-board.sql" },
   { version: 7, name: "knowledge", file: "0007-knowledge.sql" },
+  { version: 8, name: "diary", file: "0008-diary.sql" },
 ]);
 
 export class MigrationError extends Error {

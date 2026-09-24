@@ -33,6 +33,12 @@ export const DEFAULT_PENDING_TURN_TTL_DAYS = 3;
 /** 清理执行记录自身保留的条数，避免审计表自己无限增长。 */
 export const DEFAULT_RETENTION_RUN_LIMIT = 50;
 
+/** 回收站里的日记保留天数：30 天后物理删除。 */
+export const DEFAULT_DIARY_TRASH_TTL_DAYS = 30;
+/** 日记变更日志保留天数与条数上限。 */
+export const DEFAULT_DIARY_REVISION_TTL_DAYS = 180;
+export const DEFAULT_MAX_DIARY_REVISIONS = 500;
+
 /**
  * 审批记录的保留规则。
  *
@@ -93,6 +99,31 @@ export function buildAgentRetentionRules({
   ];
 }
 
+/**
+ * 日记的保留规则。
+ *
+ * 回收站里的日记 30 天后物理删除（用户主动删除的东西不该永远占着查询扫描）；
+ * 变更日志留 180 天且最多 500 条。索引表跟着条目删，但虚拟表没有外键，
+ * 所以还要单独扫一遍指向已消失条目的索引行。
+ */
+export function buildDiaryRetentionRules({
+  trashTtlDays = DEFAULT_DIARY_TRASH_TTL_DAYS,
+  revisionTtlDays = DEFAULT_DIARY_REVISION_TTL_DAYS,
+  maxRevisions = DEFAULT_MAX_DIARY_REVISIONS,
+} = {}) {
+  return [
+    { id: "diary-trash-expired", table: "diary_entries", where: "status = 'trashed' AND deleted_at < :ttl", ttlDays: trashTtlDays },
+    { id: "diary-revisions-expired", table: "diary_revisions", where: "created_at < :ttl", ttlDays: revisionTtlDays },
+    {
+      id: "diary-revisions-overflow",
+      table: "diary_revisions",
+      key: "id",
+      keep: { limit: maxRevisions, orderBy: "created_at DESC, id DESC" },
+    },
+    { id: "diary-fts-orphans", table: "diary_fts", where: "diary_id NOT IN (SELECT id FROM diary_entries)" },
+  ];
+}
+
 /** 清理记录自身的上限规则，每库一份。 */
 export function buildRetentionRunRules({ limit = DEFAULT_RETENTION_RUN_LIMIT } = {}) {
   return [
@@ -110,6 +141,7 @@ export const RETENTION_RULES = Object.freeze([
   ...buildApprovalRetentionRules(),
   ...buildSnapshotRetentionRules(),
   ...buildAgentRetentionRules(),
+  ...buildDiaryRetentionRules(),
   ...buildRetentionRunRules(),
 ]);
 

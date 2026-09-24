@@ -20,6 +20,8 @@ function open() {
     CREATE TABLE gateway_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE diary_entries (id TEXT PRIMARY KEY, status TEXT NOT NULL, deleted_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE diary_revisions (id TEXT PRIMARY KEY, diary_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE VIRTUAL TABLE diary_fts USING fts5(diary_id UNINDEXED, title, tokenize = 'trigram');
     CREATE TABLE agent_turns (turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'done', created_at TEXT NOT NULL);
     CREATE TABLE agent_signals (signal_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE agent_prompt_snapshots (snapshot_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -49,6 +51,10 @@ describe("retention rules", () => {
       "agent-prompt-snapshots-expired",
       "agent-mem0-sync-expired",
       "agent-turns-abandoned",
+      "diary-trash-expired",
+      "diary-revisions-expired",
+      "diary-revisions-overflow",
+      "diary-fts-orphans",
       "retention-runs-overflow",
     ]);
     expect(GLOBAL_RETENTION_RULES.map((rule) => rule.id)).toEqual(["sessions-expired", "retention-runs-overflow"]);
@@ -363,5 +369,28 @@ describe("retention execution", () => {
     expect(buildAgentRetentionRules({ ttlDays: 0 })).toBeTruthy();
     expect(() => validateRetentionRules(buildAgentRetentionRules({ ttlDays: 0 }))).toThrow(/正整数/);
     expect(() => validateRetentionRules(buildAgentRetentionRules({ pendingTurnTtlDays: -1 }))).toThrow(/正整数/);
+  });
+
+  it("clears trashed diaries, old revisions and orphaned search rows", () => {
+    const connection = open();
+    insert(connection, "diary_entries", ["id", "status", "deleted_at", "created_at"], [
+      { id: "old-trash", status: "trashed", deleted_at: "2026-08-01T00:00:00.000Z", created_at: "2026-07-01T00:00:00.000Z" },
+      { id: "fresh-trash", status: "trashed", deleted_at: "2026-09-20T00:00:00.000Z", created_at: "2026-09-01T00:00:00.000Z" },
+      { id: "alive", status: "active", deleted_at: null, created_at: "2026-01-01T00:00:00.000Z" },
+    ]);
+    insert(connection, "diary_revisions", ["id", "diary_id", "created_at"], [
+      { id: "rev-old", diary_id: "alive", created_at: "2025-01-01T00:00:00.000Z" },
+      { id: "rev-new", diary_id: "alive", created_at: "2026-09-20T00:00:00.000Z" },
+    ]);
+    connection.db.prepare("INSERT INTO diary_fts (diary_id, title) VALUES (?, ?)").run("alive", "还在的日记");
+    connection.db.prepare("INSERT INTO diary_fts (diary_id, title) VALUES (?, ?)").run("gone", "索引里的孤儿");
+
+    const report = runRetention({ connection, rules: RETENTION_RULES, now: NOW, logger: quiet });
+
+    expect(ids(connection, "diary_entries", "id")).toEqual(["alive", "fresh-trash"]);
+    expect(ids(connection, "diary_revisions", "id")).toEqual(["rev-new"]);
+    expect(connection.db.prepare("SELECT diary_id FROM diary_fts ORDER BY diary_id ASC").all().map((row) => row.diary_id)).toEqual(["alive"]);
+    expect(report.results.find((item) => item.id === "diary-fts-orphans")).toMatchObject({ status: "applied", removed: 1 });
+    connection.close();
   });
 });

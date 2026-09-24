@@ -43,6 +43,9 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
 import { getBrowserAccountStore } from "./browserAccountStore";
+import { createDiaryApi } from "./diary/diaryApi";
+import { DiariesView } from "./diary/diariesView";
+import { collectNodeOptions } from "./diary/diaryViewCore";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -55,6 +58,20 @@ const EMPTY_AGENT_JOURNAL = {
 };
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
 const desktopApi = window.stepview || createBrowserGatewayApi();
+
+/**
+ * 日记的唯一数据入口。
+ *
+ * 桌面模式走 preload 的 diary 命名空间，家庭模式走 browserGatewayApi 里的同名命名空间。
+ * 万一某个运行模式没提供，也只是少一个"日记"入口，不该让整个应用白屏，所以这里兜住异常。
+ */
+function createAppDiaryApi() {
+  try {
+    return createDiaryApi(desktopApi);
+  } catch {
+    return null;
+  }
+}
 
 function GatewayLogin({ api, onAuthenticated }) {
   const [registering, setRegistering] = React.useState(false);
@@ -142,6 +159,8 @@ function App() {
   const [linkDrag, setLinkDrag] = React.useState(null);
   const [branchLinkDrag, setBranchLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
+  // 右侧主列显示什么。日记是独立板块，所以在这一列里切换，而不是再开一个窗口。
+  const [mainView, setMainView] = React.useState("canvas");
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -168,6 +187,10 @@ function App() {
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
   const agentMessageListRef = React.useRef(null);
+
+  const diaryApi = React.useMemo(() => createAppDiaryApi(), []);
+  // 喂给编辑器里的节点多选，以及日记列表里的"关联到哪个节点"小标签。
+  const diaryNodeOptions = React.useMemo(() => collectNodeOptions(board), [board]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -483,6 +506,22 @@ function App() {
     window.setTimeout(() => setToast(null), 1700);
   };
 
+  /**
+   * 从日记里点"关联节点"小标签：切回画布并选中它。
+   *
+   * 画布只渲染活跃任务线里的节点，所以关联到已完成任务线的节点点不出来——
+   * 那种情况要明说，不能让用户以为点了没反应。
+   */
+  const openNodeFromDiary = (nodeId) => {
+    const id = String(nodeId);
+    setMainView("canvas");
+    if (!activeTasks.some((task) => task.nodes.some((node) => node.id === id))) {
+      showToast("这个节点在已完成的任务线里，先还原那条任务线才能看到它。");
+      return;
+    }
+    setSelectedNodeId(id);
+  };
+
   const refreshAgentApprovals = React.useCallback(async () => {
     if (!desktopApi?.listAgentApprovals) return;
     try {
@@ -603,12 +642,16 @@ function App() {
         setSelectedBranchId(null);
         setBranchDraft(null);
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedLinkId) {
+      // 在输入框里按 Backspace / Delete 是在改文字，不是在删节点或连线。
+      const target = event.target;
+      const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+      const deleting = (event.key === "Delete" || event.key === "Backspace") && !typing;
+      if (deleting && selectedLinkId) {
         updateBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
         setSelectedLinkId(null);
         showToast("Link deleted.");
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedBranchId) {
+      if (deleting && selectedBranchId) {
         deleteSelectedBranch();
       }
     };
@@ -757,6 +800,12 @@ function App() {
           </div>
         </div>
 
+        {/* 主列显示什么。用 div 不用 section：`.sidebar > section:first-of-type` 会吃到 margin-top: auto。 */}
+        <div className="mainViewSwitch" role="group" aria-label="主视图">
+          <button type="button" className={mainView === "canvas" ? "active" : ""} onClick={() => setMainView("canvas")}>🎨 画布</button>
+          <button type="button" className={mainView === "diary" ? "active" : ""} onClick={() => setMainView("diary")} disabled={!diaryApi} title={diaryApi ? undefined : "当前运行模式没有提供日记通道"}>📔 日记</button>
+        </div>
+
         {gatewayInfo?.mode === "family" && gatewayInfo.account && (
           <section className="accountPanel">
             <h2>Account</h2>
@@ -869,6 +918,9 @@ function App() {
         </section>
       </aside>
 
+      {mainView === "diary" && diaryApi ? (
+        <DiariesView api={diaryApi} nodeOptions={diaryNodeOptions} onToast={showToast} onOpenNode={openNodeFromDiary} />
+      ) : (
       <section
         ref={canvasRef}
         className="canvas"
@@ -1051,7 +1103,6 @@ function App() {
           ))}
         </div>
 
-        {toast && <div className="toast">{toast}</div>}
         {emojiRain.length > 0 && (
           <div className="emojiRain" aria-hidden="true">
             {emojiRain.map((drop) => (
@@ -1094,6 +1145,10 @@ function App() {
         )}
 
       </section>
+      )}
+
+      {/* 提示挂在 shell 层：画布和日记两个视图都要能看到它。position: fixed 不参与 .shell 的网格布局。 */}
+      {toast && <div className="toast">{toast}</div>}
 
       {noteDraft && (
         <div className="modalBackdrop" onPointerDown={() => setNoteDraft(null)}>

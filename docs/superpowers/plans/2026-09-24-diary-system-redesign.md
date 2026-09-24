@@ -329,19 +329,47 @@ diary: { list, get, create, update, trash, restore, remove,
   `kind` 列与索引按预期建出、`board_documents` 与 `approvals` 数据原样保留、
   二次运行 `applied` 为空（幂等）、篡改 `schema_migrations` 校验和被拒（`MIGRATION_MODIFIED`）。
 
-### Phase 2：业务层与双通道对齐（前端开工的前提）（落实 D3）
+### Phase 2：业务层与双通道对齐（前端开工的前提）（落实 D3）✅ 已完成
 
-- [ ] `electron/diaryService.js`：`create` / `update` / `planChange` 透传并校验 `kind`。
-- [ ] 新增两个查询口径，专门喂节点界面：
-      `listNodeEntries(nodeId)` → 该节点的原生日记；
-      `listDailyDaysForNode(nodeId)` → 去重后的 `{ day, count }[]`，正好是日期按钮排的数据。
-- [ ] HTTP：`/api/diary` 列表支持 `kind` 参数；补 `restore` 路由。
-- [ ] **补 `src/browserGatewayApi.js` 的 `diary` 命名空间**，方法名与 `electron/preload.js:41` 完全一致。
-- [ ] `src/diary/diaryApi.js`：包一层薄适配，界面只认这一个入口。
-- [ ] 测试：`tests/diaryService.test.js` 补 kind 与两个新查询；
-      `tests/familyHttpServer.test.js` 补 kind 过滤与 restore；
-      **新增 `tests/diaryChannelParity.test.js`**：同一组用例分别打 IPC 与 HTTP，断言返回结构和错误码一致。
-- [ ] 验证：`npm test` 全绿。
+- [x] `electron/diaryService.js`：新增 `listNodeEntries(nodeId)`（节点的原生日记）
+      与 `listDailyDaysForNode(nodeId)`（去重后的 `{ day, count }[]`，日期按钮排的数据）。
+- [x] 按天去重放在**仓储的 SQL** 里（`listDailyDaysForTarget`），不是先 `list` 再在内存归并：
+      `list` 有条数上限，关联的日记一多，"按天"的结果就会凭空少几天，而且少的是哪几天还看不出来。
+      测试专门造了 260 条 / 28 天来钉住这一点。
+- [x] HTTP：`/api/diary` 与 `/diary/timeline` 支持 `kind`；补 `POST /diary/:id/restore`
+      与 `GET /diary/:id/revisions`；新增 `GET /diary/days?nodeId=…`。
+      路由顺序上 `days` 必须排在通用的 `/diary/:id` 之前，否则会被当成一条日记的 id。
+- [x] **补 `src/browserGatewayApi.js` 的 `diary` 命名空间**，方法名与 `electron/preload.js` 完全一致（15 个方法）。
+- [x] `src/diary/diaryApi.js`：界面唯一入口，把裸 id 包成 `{ diaryId }` / `{ nodeId }`，通道缺失时立刻报错。
+- [x] 把日记 IPC 通道抽成 `electron/diaryIpcHandlers.js`：
+      `main.js` 依赖 Electron，在 vitest 里跑不起来；不抽出来就没法对拍 IPC 与 HTTP。
+
+**顺带修掉的两个真问题**
+
+- `diaryService.mergeEntry` 的字段白名单里**没有 `kind`**，于是"只改正文、不传 kind"的编辑
+  会把一条节点日记**静默降级成每日日记**——它会从节点的"原生日记"里消失，而数据看起来没坏。
+  这是这一版最该防的那类损坏，已修并补了回归测试。
+- HTTP 的错误响应只有 `{ error }`，不带 `code`，界面只能去比对中文句子来判断"该重新载入"还是"该改内容"。
+  现在错误响应带 `code`，且 `browserGatewayApi` 抛出的错误也带 `code` / `statusCode`，
+  两条通道的失败信息形状一致。
+
+**测试**
+
+- `tests/diaryService.test.js`：kind 在编辑后保持、节点原生日记与每日日记分开、超出分页上限的按天统计。
+- `tests/familyHttpServer.test.js`：kind 过滤、`restore`、`/diary/days`、错误响应的 `code`。
+- **新增 `tests/diaryChannelParity.test.js`**：两条通道共用同一个 context（不违反"同一进程不对同一账号库开两个写连接"），
+  同一组动作分别打 IPC 与 HTTP，对拍返回体、状态码与错误码。
+- **新增 `tests/diaryApi.test.js`**：从 `preload.js` 源码里读出日记通道形状，
+  断言「IPC 通道注册表 / 家庭模式客户端 / 界面入口」三者方法名完全一致——
+  这正是 D3 要防的漂移（加了新通道却忘了另一端）；另外钉住家庭模式客户端实际打出的 URL。
+
+**验证**
+
+- 54 个测试文件 321 个用例全绿（本阶段从 310 涨到 321），`npm run build` 通过。
+- 在**真实运行的服务**上端到端验证：节点日记缺节点关联返回 400 + `DIARY_INPUT_INVALID`；
+  建节点日记与两条同日每日日记后，`/diary/days` 返回 `[{ day, count: 2 }]`、节点原生日记返回 1 条；
+  验证完立刻 `purge` 清空，真实日记仍是空的。
+- 迁移 9 已在真实账号库上生效（`user_version` 8 → 9），`board_documents` 数据原样保留。
 
 ### Phase 3：前端骨架 + 日记板块（落实 D1、D2、N5、N6、N8）
 

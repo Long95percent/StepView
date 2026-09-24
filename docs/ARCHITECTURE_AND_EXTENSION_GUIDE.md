@@ -167,7 +167,7 @@ electron/db/
 
 **备份与恢复**
 
-`data:export-archive` 把两个库各自 `VACUUM INTO` 成一致快照（复制正在写入的数据库文件会得到半截副本，`VACUUM INTO` 不会），并附一份 manifest：格式版本、程序版本、每个库的 schema 版本、表清单与行数。
+`data:export-archive` 把每个存在的库各自 `VACUUM INTO` 成一致快照（复制正在写入的数据库文件会得到半截副本，`VACUUM INTO` 不会），并附一份 manifest：格式版本、程序版本、每个库的 schema 版本、表清单与行数。个人模式没有全局库文件，少它一份不算错误（但会在结果里如实写出来）；该有而没有的库一定报错，否则用户会拿到一份看着正常、其实缺数据的备份。
 
 恢复的顺序是"先校验、再替换"，绝不会先替换再祈祷：manifest 是否合法、`PRAGMA integrity_check` 是否通过、schema 版本是否和清单一致且不比当前程序新、必要表是否齐全——全部通过才动文件。替换时当前两个库改名成 `*.pre-restore-<时间>` 保留（不删除），旧库的 `-wal` / `-shm` 一并清掉（残留的 WAL 套在新文件上会把新库读坏）。
 

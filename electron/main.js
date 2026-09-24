@@ -178,9 +178,17 @@ app.whenReady().then(async () => {
       targetDir: path.join(parentDir, `stepview-backup-${stamp}`),
       appVersion: app.getVersion(),
       label: "manual",
+      // 个人模式不会建全局库文件，少它一份不算问题。
+      optionalDatabases: gateway.getMode() === "personal" ? ["global"] : [],
     });
     await shell.showItemInFolder(result.manifestPath);
-    return { ok: true, dir: result.dir, databases: result.manifest.databases.map((database) => database.name), tables: result.manifest.databases.reduce((sum, database) => sum + database.tables.length, 0) };
+    return {
+      ok: true,
+      dir: result.dir,
+      databases: result.manifest.databases.map((database) => database.name),
+      skipped: result.skipped,
+      tables: result.manifest.databases.reduce((sum, database) => sum + database.tables.length, 0),
+    };
   });
 
   ipcMain.handle("data:inspect-archive", async (_event, request = {}) => {

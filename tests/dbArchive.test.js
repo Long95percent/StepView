@@ -91,6 +91,26 @@ describe("database archive", () => {
     expect(account.tables.some((table) => table.name === "diary_fts")).toBe(true);
   });
 
+  it("tolerates a database that legitimately does not exist, but only when told to", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-archive-"));
+    const source = await makeDataDir("source");
+    const targetDir = path.join(tempDir, "export-account-only");
+    const missingGlobal = { ...source, globalDbPath: path.join(tempDir, "not-there.sqlite") };
+
+    // 个人模式没有全局库：标成可选就只导账号库，并如实告诉调用方少了谁。
+    const result = exportArchive({ ...missingGlobal, targetDir, logger: SILENT, optionalDatabases: ["global"] });
+    expect(result.manifest.databases.map((entry) => entry.name)).toEqual(["account"]);
+    expect(result.skipped).toEqual(["global"]);
+    expect(inspectArchive({ dir: targetDir, expectedSchemaVersion: SUPPORTED, requiredTables: REQUIRED }).ok).toBe(true);
+
+    // 没标可选的库不见了，必须报错：否则用户会拿到一份看着正常、其实缺数据的备份。
+    const strictDir = path.join(tempDir, "export-strict");
+    expect(() => exportArchive({ ...missingGlobal, targetDir: strictDir, logger: SILENT })).toThrowError(
+      expect.objectContaining({ code: "ARCHIVE_DB_MISSING" }),
+    );
+    expect(fs.existsSync(strictDir)).toBe(false);
+  });
+
   it("reads back the manifest that was written to disk", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-archive-"));
     const source = await makeDataDir("source");

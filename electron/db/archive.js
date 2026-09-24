@@ -138,17 +138,34 @@ export function describeDatabase({ dbPath, fsApi = fs } = {}) {
  * 每个库都走 SQLite 自己的 VACUUM INTO：复制正在写的文件会得到半截副本，VACUUM INTO 不会。
  * 导出是只读的，不动用户正在用的库。
  */
-export function exportArchive({ globalDbPath, accountDbPath, targetDir, now = new Date(), appVersion = null, label = "manual", fsApi = fs, logger = console } = {}) {
+export function exportArchive({
+  globalDbPath,
+  accountDbPath,
+  targetDir,
+  now = new Date(),
+  appVersion = null,
+  label = "manual",
+  optionalDatabases = [],
+  fsApi = fs,
+  logger = console,
+} = {}) {
   if (!targetDir) throw new ArchiveError("导出需要指定目标目录。", { code: "ARCHIVE_TARGET_REQUIRED" });
-  const sources = [
+  const candidates = [
     { name: "global", fileName: "gateway.sqlite", dbPath: globalDbPath },
     { name: "account", fileName: "stepview.sqlite", dbPath: accountDbPath },
   ].filter((source) => source.dbPath);
 
-  if (sources.length === 0) throw new ArchiveError("导出需要一个或多个数据库路径。", { code: "ARCHIVE_SOURCE_REQUIRED" });
-  for (const source of sources) {
-    if (!fsApi.existsSync(source.dbPath)) throw new ArchiveError(`数据库不存在：${source.dbPath}`, { code: "ARCHIVE_DB_MISSING" });
+  if (candidates.length === 0) throw new ArchiveError("导出需要一个或多个数据库路径。", { code: "ARCHIVE_SOURCE_REQUIRED" });
+
+  // 个人模式根本没有全局库文件（账号和会话都在账号库里）。少一个"本来就不该有"的库不算错误，
+  // 少一个"应该存在"的库必须报出来，否则用户会拿到一份看起来正常、其实缺数据的备份。
+  const missing = candidates.filter((source) => !fsApi.existsSync(source.dbPath));
+  const missingRequired = missing.filter((source) => !optionalDatabases.includes(source.name));
+  if (missingRequired.length > 0 || missing.length === candidates.length) {
+    const absent = (missingRequired.length > 0 ? missingRequired : missing).map((source) => source.dbPath).join("、");
+    throw new ArchiveError(`数据库不存在：${absent}`, { code: "ARCHIVE_DB_MISSING" });
   }
+  const sources = candidates.filter((source) => !missing.includes(source));
 
   fsApi.mkdirSync(targetDir, { recursive: true });
 
@@ -183,7 +200,7 @@ export function exportArchive({ globalDbPath, accountDbPath, targetDir, now = ne
   };
   const manifestPath = path.join(targetDir, ARCHIVE_MANIFEST_FILE);
   fsApi.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return { dir: targetDir, manifestPath, manifest };
+  return { dir: targetDir, manifestPath, manifest, skipped: missing.map((source) => source.name) };
 }
 
 /**

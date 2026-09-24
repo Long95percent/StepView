@@ -19,6 +19,7 @@ import { createApprovalRepository } from "../electron/db/repositories/approvalRe
 import { createBoardRepository } from "../electron/db/repositories/boardRepository.js";
 import { createDiaryRepository } from "../electron/db/repositories/diaryRepository.js";
 import { createAccountStore } from "../electron/gateway/accountStore.js";
+import { MIGRATIONS } from "../electron/db/migrations/index.js";
 import { normalizeBoard, buildTask } from "../src/progressCore.js";
 
 const NOW = new Date("2026-09-24T10:00:00.000Z");
@@ -180,6 +181,59 @@ describe("database archive", () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "stepview-archive-"));
     expect(() => inspectArchive({ dir: tempDir })).not.toThrow();
     expect(inspectArchive({ dir: tempDir })).toMatchObject({ ok: false, problems: [{ code: "ARCHIVE_MANIFEST_MISSING" }] });
+  });
+
+  it("accepts a backup taken with an older schema and upgrades it on open", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-archive-"));
+    const sourceDir = path.join(tempDir, "old");
+    // 用只跑到第 6 版的迁移建库：这份备份天然没有日记相关的表。
+    const oldDb = openAccountDatabase({ dataDir: sourceDir, migrations: MIGRATIONS.slice(0, 6), importLegacy: false });
+    createBoardRepository({ connection: oldDb }).save(normalizeBoard({ tasks: [buildTask("老备份", { x: 1, y: 2 }, NOW)] }));
+    oldDb.close();
+
+    const targetDir = path.join(tempDir, "export-old");
+    const result = exportArchive({
+      accountDbPath: path.join(sourceDir, "stepview.sqlite"),
+      targetDir,
+      logger: SILENT,
+      optionalDatabases: ["global"],
+    });
+    expect(result.manifest.databases[0].schemaVersion).toBe(6);
+
+    // 老备份缺后来才加的表，不算"备份不完整"——把新表列成必需会让三个月前的备份无法恢复。
+    const report = inspectArchive({ dir: targetDir });
+    expect(report.problems).toEqual([]);
+    expect(report.ok).toBe(true);
+
+    // 恢复之后照常打开：迁移补齐到当前版本，数据还在。
+    const restoredDir = path.join(tempDir, "restored-old");
+    fs.mkdirSync(restoredDir, { recursive: true });
+    restoreArchive({ dir: targetDir, targets: { account: path.join(restoredDir, "stepview.sqlite") }, now: NOW });
+
+    const reopened = openAccountDatabase({ dataDir: restoredDir });
+    opened.push(reopened);
+    expect(createBoardRepository({ connection: reopened }).readBoard().tasks[0].title).toBe("老备份");
+    expect(reopened.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version).toBe(8);
+  });
+
+  it("checks a backup without touching a single byte of it", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-archive-"));
+    const source = await makeDataDir("source");
+    const targetDir = path.join(tempDir, "export");
+    exportArchive({ ...source, targetDir, logger: SILENT });
+
+    const snapshot = (name) => {
+      const stats = fs.statSync(path.join(targetDir, name));
+      return { bytes: stats.size, mtimeMs: stats.mtimeMs };
+    };
+    const before = { entries: fs.readdirSync(targetDir).sort(), sqlite: snapshot("stepview.sqlite") };
+
+    expect(inspectArchive({ dir: targetDir }).ok).toBe(true);
+    expect(listArchiveContents(targetDir).databases).toHaveLength(2);
+
+    // 校验是只读的：备份文件一个字节都不能变，也不能多出 -wal / -shm 之类的边角文件。
+    expect(fs.readdirSync(targetDir).sort()).toEqual(before.entries);
+    expect(snapshot("stepview.sqlite")).toEqual(before.sqlite);
   });
 
   it("keeps the current databases aside and cleans stale WAL files on restore", async () => {

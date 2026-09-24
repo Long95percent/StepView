@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createConnection } from "./connection.js";
+import { GLOBAL_MIGRATIONS, MIGRATIONS } from "./migrations/index.js";
 
 /**
  * 统一的数据库导出与恢复。
@@ -16,41 +17,21 @@ export const ARCHIVE_FORMAT = "stepview-database-archive";
 export const ARCHIVE_FORMAT_VERSION = 1;
 export const ARCHIVE_MANIFEST_FILE = "manifest.json";
 
-/** 备份里必须存在的表。少一张就说明这份快照不完整，恢复之后会缺功能。 */
-export const GLOBAL_REQUIRED_TABLES = Object.freeze([
-  "schema_migrations",
-  "accounts",
-  "sessions",
-  "gateway_settings",
-  "retention_runs",
-]);
+/**
+ * 要求备份里必须存在的表——只取"能认得出这是 StepView 的这个库"的那几张。
+ *
+ * 故意不列全：老备份是按当年那份 schema 导出的，天然不会有后来才加的表。
+ * 把新表列成必需，会让"三个月前的备份"直接变成不可恢复，而它本来打开时补跑迁移就升级好了。
+ */
+export const GLOBAL_REQUIRED_TABLES = Object.freeze(["schema_migrations", "accounts", "sessions"]);
 
-export const ACCOUNT_REQUIRED_TABLES = Object.freeze([
-  "schema_migrations",
-  "kv",
-  "retention_runs",
-  "approvals",
-  "snapshots",
-  "board_documents",
-  "agent_sessions",
-  "agent_turns",
-  "agent_session_windows",
-  "agent_signals",
-  "agent_prompt_snapshots",
-  "agent_mem0_sync_log",
-  "memory_items",
-  "memory_evidence",
-  "memory_feedback",
-  "memory_relations",
-  "memory_embeddings",
-  "profile_items",
-  "knowledge_bases",
-  "diary_entries",
-  "diary_links",
-  "diary_tags",
-  "diary_entry_tags",
-  "diary_revisions",
-]);
+export const ACCOUNT_REQUIRED_TABLES = Object.freeze(["schema_migrations", "kv", "board_documents"]);
+
+/** 当前代码能处理到哪个 schema 版本。比这新的备份不能恢复，比这旧的会在打开时补跑迁移。 */
+export const SUPPORTED_SCHEMA_VERSION = Object.freeze({
+  global: Math.max(...GLOBAL_MIGRATIONS.map((migration) => migration.version)),
+  account: Math.max(...MIGRATIONS.map((migration) => migration.version)),
+});
 
 export class ArchiveError extends Error {
   constructor(message, { code = "ARCHIVE_FAILED", problems = [] } = {}) {
@@ -86,8 +67,9 @@ function forEachDatabase(manifest, visit) {
   for (const entry of databases) visit(entry);
 }
 
+/** 打开一份快照做检查。真只读：校验过程不会给用户的备份留下任何改动。 */
 function openReadOnly(dbPath) {
-  return createConnection({ dbPath, pragmas: { journal_mode: "WAL", foreign_keys: "ON", busy_timeout: 5000 } });
+  return createConnection({ dbPath, readOnly: true });
 }
 
 /** 用户表清单。FTS5 会自动建一堆影子表，列出来只是噪音，一并略过。 */
@@ -208,7 +190,12 @@ export function exportArchive({
  *
  * 只读，不改任何文件。返回所有问题而不是碰到第一个就停，用户一次就能看到缺什么。
  */
-export function inspectArchive({ dir, expectedSchemaVersion = {}, requiredTables = {}, fsApi = fs } = {}) {
+export function inspectArchive({
+  dir,
+  expectedSchemaVersion = SUPPORTED_SCHEMA_VERSION,
+  requiredTables = { global: GLOBAL_REQUIRED_TABLES, account: ACCOUNT_REQUIRED_TABLES },
+  fsApi = fs,
+} = {}) {
   const problems = [];
   const push = (code, message) => problems.push({ code, message });
 
@@ -218,6 +205,9 @@ export function inspectArchive({ dir, expectedSchemaVersion = {}, requiredTables
   } catch (error) {
     return { ok: false, problems: [{ code: error.code || "ARCHIVE_MANIFEST_MISSING", message: error.message }], manifest: null, databases: [] };
   }
+
+  // 覆盖调用方传进来的那一部分，其余仍然按当前代码支持的版本检查。
+  const supportedVersions = { ...SUPPORTED_SCHEMA_VERSION, ...expectedSchemaVersion };
 
   if (manifest.format !== ARCHIVE_FORMAT) push("ARCHIVE_FORMAT_UNKNOWN", `这份备份的类型不是 StepView 数据库备份：${manifest.format ?? "（空）"}`);
   if (Number(manifest.formatVersion) > ARCHIVE_FORMAT_VERSION) {
@@ -250,7 +240,7 @@ export function inspectArchive({ dir, expectedSchemaVersion = {}, requiredTables
       if (actualSchemaVersion !== Number(entry.schemaVersion || 0)) {
         push("ARCHIVE_SCHEMA_MISMATCH", `${entry.fileName} 的 schema 版本（${actualSchemaVersion}）和清单里写的不一致（${entry.schemaVersion}）。`);
       }
-      const supported = expectedSchemaVersion[entry.name];
+      const supported = supportedVersions[entry.name];
       if (supported !== undefined && actualSchemaVersion > Number(supported)) {
         push("ARCHIVE_SCHEMA_TOO_NEW", `${entry.name} 备份的 schema 版本（${actualSchemaVersion}）比当前程序支持的（${supported}）新，请升级 StepView 再恢复。`);
       }
@@ -277,7 +267,15 @@ export function inspectArchive({ dir, expectedSchemaVersion = {}, requiredTables
  * 替换不是删除：当前的两个库会改名成 `*.pre-restore-<时间>` 留在原地，恢复错了还能退回来。
  * 旧的 -wal / -shm 必须一起清掉：它们是旧库的 WAL，套在新文件上会把新库读坏。
  */
-export function restoreArchive({ dir, targets = {}, expectedSchemaVersion = {}, requiredTables = {}, now = new Date(), fsApi = fs, canRestore } = {}) {
+export function restoreArchive({
+  dir,
+  targets = {},
+  expectedSchemaVersion = SUPPORTED_SCHEMA_VERSION,
+  requiredTables = { global: GLOBAL_REQUIRED_TABLES, account: ACCOUNT_REQUIRED_TABLES },
+  now = new Date(),
+  fsApi = fs,
+  canRestore,
+} = {}) {
   const report = inspectArchive({ dir, expectedSchemaVersion, requiredTables, fsApi });
   if (!report.ok) {
     throw new ArchiveError("这份备份没通过校验，没有改动任何数据。", { code: "ARCHIVE_NOT_RESTORABLE", problems: report.problems });

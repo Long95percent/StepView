@@ -13,14 +13,23 @@ function isThenable(value) {
   return Boolean(value) && typeof value.then === "function";
 }
 
-export function createConnection({ dbPath, fsApi = fs, pragmas = DEFAULT_PRAGMAS } = {}) {
+/**
+ * 只读连接上能设的 PRAGMA。
+ *
+ * 写型 PRAGMA（journal_mode 等）在只读连接上会被拒绝；只读场景本来也不该改文件，
+ * 打开一份备份做校验时更不能顺手把用户的备份动了。
+ */
+const READ_ONLY_PRAGMAS = Object.freeze({ foreign_keys: "ON", busy_timeout: 5000 });
+
+export function createConnection({ dbPath, fsApi = fs, pragmas = DEFAULT_PRAGMAS, readOnly = false } = {}) {
   if (typeof dbPath !== "string" || !dbPath.trim()) throw new Error("A database path is required.");
 
   const inMemory = dbPath === ":memory:";
-  if (!inMemory) fsApi.mkdirSync(path.dirname(dbPath), { recursive: true });
+  // 只读连接不建目录也不建文件：路径写错了要报错，而不是凭空造一个空库出来。
+  if (!inMemory && !readOnly) fsApi.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  const db = new DatabaseSync(dbPath);
-  for (const [name, value] of Object.entries(pragmas)) db.exec(`PRAGMA ${name} = ${value}`);
+  const db = new DatabaseSync(dbPath, readOnly ? { readOnly: true } : {});
+  for (const [name, value] of Object.entries(readOnly ? READ_ONLY_PRAGMAS : pragmas)) db.exec(`PRAGMA ${name} = ${value}`);
 
   let transactionDepth = 0;
   let closed = false;
@@ -79,6 +88,7 @@ export function createConnection({ dbPath, fsApi = fs, pragmas = DEFAULT_PRAGMAS
   return {
     db,
     dbPath,
+    readOnly,
     withTransaction,
     tableExists,
     inTransaction: () => transactionDepth > 0,

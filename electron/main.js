@@ -7,14 +7,7 @@ import { createGateway } from "./gateway/createGateway.js";
 import { streamOpenAIChat } from "./openAiStream.js";
 import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
 import { completeChatWithTools } from "./agentChatCompletion.js";
-import {
-  ACCOUNT_REQUIRED_TABLES,
-  GLOBAL_REQUIRED_TABLES,
-  exportArchive,
-  inspectArchive,
-  restoreArchive,
-} from "./db/archive.js";
-import { GLOBAL_MIGRATIONS, MIGRATIONS } from "./db/migrations/index.js";
+import { exportArchive, inspectArchive, restoreArchive } from "./db/archive.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -153,12 +146,7 @@ app.whenReady().then(async () => {
     return exportedPath;
   });
   // 统一的备份与恢复。导出只读两个库，恢复先校验再替换，当前数据改名保留不删除。
-  const supportedSchemaVersion = {
-    global: Math.max(...GLOBAL_MIGRATIONS.map((migration) => migration.version)),
-    account: Math.max(...MIGRATIONS.map((migration) => migration.version)),
-  };
-  const requiredTables = { global: GLOBAL_REQUIRED_TABLES, account: ACCOUNT_REQUIRED_TABLES };
-
+  // 校验标准（支持的 schema 版本、必须有的表）由 electron/db/archive.js 定义，这里不再抄一份。
   async function pickArchiveDirectory({ title, create }) {
     const properties = ["openDirectory"];
     if (create) properties.push("createDirectory");
@@ -194,7 +182,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("data:inspect-archive", async (_event, request = {}) => {
     const dir = request.dir || (await pickArchiveDirectory({ title: "选择要检查的备份目录" }));
     if (!dir) return { ok: false, canceled: true };
-    const report = inspectArchive({ dir, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    const report = inspectArchive({ dir });
     return { ok: report.ok, dir, exportedAt: report.manifest?.exportedAt || null, problems: report.problems, databases: report.databases };
   });
 
@@ -202,7 +190,7 @@ app.whenReady().then(async () => {
     const dir = request.dir || (await pickArchiveDirectory({ title: "选择要恢复的备份目录" }));
     if (!dir) return { ok: false, canceled: true };
 
-    const report = inspectArchive({ dir, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    const report = inspectArchive({ dir });
     if (!report.ok) return { ok: false, dir, problems: report.problems };
 
     const confirmation = await dialog.showMessageBox({
@@ -219,7 +207,14 @@ app.whenReady().then(async () => {
     const paths = gateway.getDatabasePaths();
     // 先把所有连接关掉，再动文件：SQLite 还有连接打开时替换文件会读到半截状态。
     await gateway.close();
-    const result = restoreArchive({ dir, targets: paths, expectedSchemaVersion: supportedSchemaVersion, requiredTables });
+    let result;
+    try {
+      result = restoreArchive({ dir, targets: paths });
+    } catch (error) {
+      // 网关已经关了：把原来的数据重新打开，别把用户留在一个开不了画布的应用里。
+      await gateway.initialize();
+      throw error;
+    }
     isQuittingAfterStorageFlush = true;
     app.relaunch();
     app.exit(0);

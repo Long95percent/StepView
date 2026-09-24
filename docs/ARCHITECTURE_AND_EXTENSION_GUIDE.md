@@ -1,6 +1,6 @@
 # StepView 架构与扩展开发报告
 
-更新时间：2026-08-24
+更新时间：2026-09-24
 
 ## 1. 当前状态
 
@@ -11,7 +11,8 @@ StepView 当前是 Electron + React/Vite 应用。主进程负责 Gateway、账�
 核心原则：
 
 - Board 是用户画布事实来源，Agent 只能通过提案请求修改。
-- `agent-memory.sqlite` 是可审计的对话记忆仓库，不等于 Board 快照。
+- 需要持久化的数据只有一个入口：数据库层（`electron/db/`）。业务代码调仓储，不关心数据存在哪、怎么存。
+- 长期记忆是可审计的仓库（`memory_*` 表），不等于 Board 快照。
 - Mem0、向量模型和其他外部服务只能作为可拔插 provider，不能成为唯一事实源。
 - 所有账号、Agent、workspace、session 作用域由主进程注入，不能信任 Renderer 或模型传入的账号 ID。
 - 记忆默认先是 `candidate`，明确确认后才进入 `active`。
@@ -27,9 +28,11 @@ flowchart TB
     MAIN --> GW[Gateway / Account Context]
     GW --> AS[Agent Service]
     GW --> BOARD[Board Storage]
-    GW --> MEM[Memory Repository\nagent-memory.sqlite]
-    GW --> PROFILE[User Profile\nuser-profile.sqlite]
-    GW --> KB[Knowledge Bases]
+    GW --> DB[(Database Layer\ngateway.sqlite + stepview.sqlite)]
+    DB --> MEM[Memory Repository]
+    DB --> PROFILE[User Profile]
+    DB --> DIARY[Diary]
+    DB --> KB[Knowledge Bases]
     AS --> ORCH[Context Orchestrator]
     ORCH --> MEM
     ORCH --> PLUG[Memory Plugin Manager]
@@ -54,10 +57,22 @@ src/                                      Renderer/UI
 electron/main.js                          Electron 主进程和 IPC 注册
 electron/preload.js                        安全暴露给 Renderer 的 API
 electron/config.js                         环境变量和运行模式配置
-electron/boardStorage.js                   Board 读写和备份
+electron/boardStorage.js                   Board 存储的薄适配器（读写都走仓储）
+electron/diaryService.js                   日记业务层（校验、回收站、节点备注导入）
 electron/agentService.js                   Agent 会话、Prompt、turn 生命周期
-electron/agentSqliteStore.js              会话/turn/window/signal/prompt 日志
-electron/agentMemorySqliteStore.js         独立长期记忆数据库
+
+electron/db/                               数据库层：唯一的数据入口
+  index.js                                   openAccountDatabase() / openGlobalDatabase()
+  connection.js                              DatabaseSync 封装：PRAGMA、withTransaction
+  migrations/                                顺序迁移注册表与 .sql
+  repositories/                              每个领域一个仓储
+  retention.js                               所有 TTL 与清理规则的唯一定义处
+  maintenance.js                             启动一次 + 每天一次的清理调度
+  backup.js                                  VACUUM INTO 轮转备份
+  archive.js                                 统一的导出、校验与恢复
+  boardExport.js                             画布 JSON 镜像（过渡用，Phase 7 之后移除）
+  boardHash.js                               画布指纹，审批冲突检测
+  legacyImport.js                            旧文件的一次性导入（幂等）
 
 electron/gateway/
   createGateway.js                         Gateway 工厂
@@ -72,22 +87,89 @@ electron/agent/
   memoryWriter.js                           去重、冲突和证据写入策略
   contextOrchestrator.js                    本地/插件检索和 Context Pack
   embeddingProvider.js                      embedding provider 扩展边界
-  userProfileStore.js                       独立用户画像 SQLite
   knowledgeBaseRegistry.js                 领域知识库模板和 manifest
   toolRegistry.js                           工具注册和发现
   toolRuntime.js                            工具校验、权限、超时和审计
   builtInTools.js                           内置 Board/Memory/Agent 工具
   toolSchema.js                             工具定义规范化和 input schema 校验
   toolBridge.js                             各 Gateway 共用的工具上下文和 OpenAI schema 适配
-  tools/                                    统一工具清单（board / memory / agent 三组）
+  tools/                                    统一工具清单（board / diary / memory / agent 四组）
   approvalManager.js                        提案审批队列
-  approvalService.js                        记忆提案和 Board 提案的统一审批入口
+  approvalService.js                        记忆、画布与日记提案的统一审批入口
   boardChangePlanner.js                     Board 变更操作（受控枚举，复用 progressCore）
   boardDiff.js                              变更 diff 和中文摘要
-  boardChangeStore.js                       提案暂存、备份快照和保留策略
+  boardChangeStore.js                       提案暂存、备份快照和保留策略（表，不扫目录）
   boardChangeExecutor.js                    审批通过后的落盘执行器和版本校验
   agentAuditStore.js                        审计写入适配器
 ```
+
+### 2.2 数据库层（唯一的数据入口）
+
+这一层解决的是"数据到底存在哪"没人说得清的问题。以前账号、画布、Agent 会话、长期记忆、画像、知识库、审批队列散在 14 处：整文件 JSON、一个提案一个文件、三个 SQLite、Redis、localStorage，还有重启就丢的内存 Map。
+
+**目录与职责**
+
+```text
+electron/db/
+  index.js                  openAccountDatabase() / openGlobalDatabase()
+  connection.js             DatabaseSync 封装：PRAGMA、withTransaction、连接生命周期
+  migrations/               顺序迁移注册表与 .sql（只能追加，不能修改已发布的文件）
+  repositories/             每个领域一个仓储：account / board / diary / approval /
+                            agentSession / agentMemory / userProfile / knowledgeBase
+  retention.js              全部 TTL 与定期清理的唯一定义处
+  maintenance.js            启动跑一次 + 每天一次的清理调度
+  backup.js                 VACUUM INTO 轮转备份
+  archive.js                统一的导出、校验与恢复
+  boardExport.js            画布 JSON 镜像（过渡用，Phase 7 之后移除）
+  boardHash.js              画布指纹，审批冲突检测用
+  legacyImport.js           旧文件的一次性导入，幂等
+  transfer.js               个人数据导入家庭账号时的只读搬运
+```
+
+**边界规则**
+
+1. `node:sqlite` 只允许出现在 `electron/db/` 里，其他模块一律通过仓储读写。
+2. 业务代码不直接碰数据文件；`electron/db/` 之外的文件写入受边界测试限制。
+3. 过期与删除只在 `electron/db/retention.js` 定义，别处不许写 TTL。
+4. 迁移必须幂等、失败可重试；`schema_migrations` 记录每一步的版本与 SQL 校验和，改动已发布的迁移会被直接拒绝。
+5. 这些规则由 `tests/dbBoundary.test.js` 扫描源码强制执行，豁免名单只减不增——目前只剩两条永久豁免（`preflight.js`、`redisManager.js`）。
+
+**两个数据库**
+
+| 库 | 文件 | 内容 |
+| --- | --- | --- |
+| 全局库 | `gateway.sqlite` | 账号、登录会话、全局设置、它自己的清理记录 |
+| 账号库 | `stepview.sqlite` | 画布文档、日记、审批与快照、Agent 会话与信号、长期记忆、用户画像、知识库 |
+
+个人模式的数据目录就是数据目录本身；家庭模式每个账号一个 `accounts/<account-id>/stepview.sqlite`。两个库各有一份 `schema_migrations`，互不影响。
+
+**保留策略（一张表）**
+
+| 数据 | 规则 |
+| --- | --- |
+| 登录会话 | 过期即删 |
+| 已完成的 Agent 轮次 | **不清理**——那是用户自己的对话历史 |
+| 半截（`status = 'pending'`）的轮次 | 超过 2 天删除 |
+| Agent 信号 / 提示词快照 / Mem0 同步日志 | 天数与条数上限，见 `RETENTION_RULES` |
+| 画布变更提案与快照 | 7 天 / 上限 20 |
+| 回收站里的日记 | 30 天后物理删除 |
+| 日记变更日志 | 180 天且最多 500 条 |
+
+每条规则单独一个用例：只删该删的；刚好压在 TTL 上的记录不删；重跑不误删；每次执行的统计写进 `retention_runs`。
+
+**内存态三分类**
+
+判断方法只有一句话：问"进程重启之后，用户会不会发现少了东西"。
+
+- **可以丢的缓存**：Redis 提示词/窗口状态、账号上下文 LRU。丢了会重新算，不影响正确性。
+- **必须落库的状态**：审批队列、画布提案与快照、会话窗口、导入标记（`kv` 表）。重启后必须还在，所以一律进表。
+- **只活在一次调用里的对象**：请求体、工具上下文、渲染中间结果。出栈即弃，不进任何存储。
+
+**备份与恢复**
+
+`data:export-archive` 把两个库各自 `VACUUM INTO` 成一致快照（复制正在写入的数据库文件会得到半截副本，`VACUUM INTO` 不会），并附一份 manifest：格式版本、程序版本、每个库的 schema 版本、表清单与行数。
+
+恢复的顺序是"先校验、再替换"，绝不会先替换再祈祷：manifest 是否合法、`PRAGMA integrity_check` 是否通过、schema 版本是否和清单一致且不比当前程序新、必要表是否齐全——全部通过才动文件。替换时当前两个库改名成 `*.pre-restore-<时间>` 保留（不删除），旧库的 `-wal` / `-shm` 一并清掉（残留的 WAL 套在新文件上会把新库读坏）。
 
 ## 3. 一次 Agent 请求的运行链路
 
@@ -331,7 +413,7 @@ export const boardTools = [defineTool({
 
 ### 6.2 Board 变更的备份、diff 和确认流程
 
-`board.propose_change` 是唯一面向模型的 Board 写入口，风险等级为 `propose`：它只写暂存区，不碰线上 `stepview-board.json`。
+`board.propose_change` 是唯一面向模型的 Board 写入口，风险等级为 `propose`：它只写暂存区，不碰线上画布。
 
 ```mermaid
 flowchart LR
@@ -347,10 +429,11 @@ flowchart LR
 ```
 
 - 支持的操作是受控枚举（`task.*` / `node.*` / `sticker.*`），全部复用 `src/progressCore.js` 的既有函数，保证 Agent 写入与 UI 写入的结构完全一致。
-- 提案文件位于 `<账号目录>/proposals/<proposalId>.json`，内含原始 Board 备份、候选 Board、`baseHash` 和 diff；用户决定后立即清理，避免堆积。
+- 提案存在账号库的 `approvals` / `snapshots` 表里，内含原始 Board 备份、候选 Board、`baseHash` 和 diff。以前是一个提案一个 JSON 文件、列个表要扫目录，现在一次查询就够。
 - 审批通过时 `boardChangeExecutor` 会重新读取当前 Board 并比对 `baseHash`。不一致说明期间有别的写入，直接拒绝，不会覆盖用户的新数据。
-- 落盘前会在 `<账号目录>/history/` 留一份带时间戳的快照，`boardStorage` 自身在每次写入前也会滚动更新 `stepview-board.backup.json`。
-- 待确认提案存在磁盘上，重启后依然会出现在审批列表里，不会因为进程退出而丢失或多写。
+- 落盘前的快照写进 `snapshots` 表；画布镜像 `stepview-board.json` 由数据库层维护，`boardStorage` 自身滚动更新镜像的上一版。
+- 待确认提案落库，重启后依然会出现在审批列表里，不会因为进程退出而丢失或多写。
+- 同一套审批队列还承载记忆提案和日记提案（`diary_change`）。Agent 想写日记也只能生成提案，用户批准后才落库。
 
 ## 7. 数据隔离和目录约定
 
@@ -359,37 +442,39 @@ flowchart LR
 ```mermaid
 flowchart TD
     ACCOUNT[accountId] --> DIR[accounts/<account-id>]
-    DIR --> BOARD[stepview-board.json]
-    DIR --> SESSION[stepview-agent.sqlite]
-    DIR --> MEMORY[agent-memory.sqlite]
-    DIR --> PROFILE[user-profile.sqlite]
-    DIR --> PROPOSALS[proposals 待确认的 Board 变更]
-    DIR --> HISTORY[history 落盘前的 Board 快照]
-    DIR --> KBS[knowledge-bases]
-    KBS --> KB1[astrology / career / custom]
+    DIR --> DB[(stepview.sqlite)]
+    DB --> BOARD[board_documents 画布文档]
+    DB --> DIARY[diary_* 日记]
+    DB --> APPROVAL[approvals / snapshots 审批]
+    DB --> SESSION[agent_* 会话与信号]
+    DB --> MEMORY[memory_* 长期记忆]
+    DB --> PROFILE[profile_items 用户画像]
+    DB --> KBS[knowledge_bases 知识库]
     MEMORY -. cannot cross .-> OTHER[other account directory]
     BOARD -. Agent only proposes .-> APPROVE[Approval Manager]
 ```
 
 ```text
 userData/
+  gateway.sqlite                 全局库：账号、登录会话、全局设置
   accounts/<account-id>/
-    stepview-board.json
-    stepview-agent.sqlite
-    agent-memory.sqlite
-    user-profile.sqlite
-    knowledge-bases/<knowledge-base-id>/
-      manifest.json
+    stepview.sqlite              账号库：画布、日记、审批、Agent、记忆、画像、知识库
+    stepview-board.json          画布 JSON 镜像（过渡用，Phase 7 之后移除）
+    stepview-board.backup.json   镜像的上一版
+  backups/                       VACUUM INTO 轮转备份
+  stepview-backup-<时间>/         显式导出的一份完整快照（manifest.json + 两个库）
 ```
 
 Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 Gateway 登录账号。账号切换时必须关闭旧 context，再创建新的 Board、Agent、Memory、Plugin 和 Tool 依赖。
 
 ## 8. 当前已知限制
 
-- `userProfileStore` 和 `knowledgeBaseRegistry` 已有基础存储/模板能力，但尚未接入完整 UI。
-- 关键词检索已可用；向量检索和 reranker 仍通过 provider 边界预留。
+- 用户画像和知识库已有仓储能力，但尚未接入完整 UI。
+- 关键词检索已可用；向量检索和 reranker 仍通过 provider 边界预留。日记的中文检索走混合策略：三字及以上用 FTS5 的 trigram，少于三字回退 `LIKE`（trigram 对两字查询无解）。
 - 家庭版已提供带 Bearer session 的 HTTP Gateway；默认绑定回环地址，LAN 模式仍需继续补充 CIDR 白名单和限流。
-- Agent SQLite 通过账号独立数据库实现隔离，旧表尚未做字段级 accountId 迁移。
+- 账号库通过"每账号一个文件"实现隔离，旧的 Agent 表没有 `account_id` 列（文件即边界），没有强行加。
+- 已软删除的记忆还没有物理清理规则：它会级联到三张子表，需要单独评审，暂时按"不删"处理。
+- 画布多标签页同时编辑仍是后写覆盖先写；要修得在保存时做乐观并发校验并配前端冲突提示（见 Phase 7 说明）。
 - 正式 Recall@K、Precision@K 和 Prompt Injection 评测集尚未建立。
 
 ## 9. 推荐扩展顺序
@@ -399,5 +484,6 @@ Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 G
 新增外部记忆后端：`Provider -> Plugin Manager -> Orchestrator`，不要修改 `agentService` 的核心流程。
 
 新增工具：`defineTool（tools/<domain>Tools.js） -> Registry -> Runtime -> Approval（如需） -> IPC/UI`。
+新增需要持久化的数据：先在 `electron/db/migrations/` 加一条迁移，再写仓储，最后才让业务层调用——不要绕开数据库层直接写文件或开库。
 
 新增领域工作区：创建独立 knowledge base、schema、source/ingestion policy 和 domain tools，不要把领域知识混入通用用户记忆表。

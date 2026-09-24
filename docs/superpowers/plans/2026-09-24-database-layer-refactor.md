@@ -447,13 +447,28 @@ Phase 3、4、5 一共删掉了 8 条。
 
 - 验证：51 个测试文件 287 个用例全绿（本阶段从 269 涨到 287），`npm run build` 通过。
 
-### Phase 7：备份与文档
+### Phase 7：备份与文档（进行中）
 
-- [ ] 暴露统一的导出与备份接口：`VACUUM INTO` 出单个完整快照，附带版本号和表清单。
-- [ ] 提供恢复流程：校验快照完整性与 schema 版本兼容性后再导入。
-- [ ] 更新 `docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`：补上数据库层的边界规则、目录结构、保留策略表和内存态三分类。
-- [ ] 更新 `README.md` 的数据文件说明（数据目录从多个文件变为两个库）。
-- [ ] 提交：`docs: document the database layer`
+**导出与恢复（提交 `825119f`）**
+
+- [x] 统一的导出接口：`electron/db/archive.js` 把两个库各自 `VACUUM INTO` 成一致快照，附一份 manifest——格式版本、程序版本、每个库的 schema 版本、表清单与行数。FTS5 的影子表不进清单。
+- [x] 恢复流程：先校验、再替换。装不下就一个字节都不动。校验项：manifest 合法性、`PRAGMA integrity_check`、schema 版本与清单一致且不比当前程序新、必要表齐全；
+      问题一次报全而不是碰到第一个就停。替换时当前库改名成 `*.pre-restore-<时间>` 保留，旧库的 `-wal` / `-shm` 一并清掉。
+- [x] 桌面端通道：`data:export-archive` / `data:inspect-archive` / `data:restore-archive`。恢复前先关掉网关再动文件，完成后自动重启。
+- [x] 测试：`tests/dbArchive.test.js`（导出内容与行数、校验的各类失败、恢复保留旧库并清理 WAL、校验不过时不动数据、连接未关闭时拒绝恢复）。
+
+**文档**
+
+- [x] 更新 `docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`：新增「2.2 数据库层」——目录结构、四条边界规则、两个库的分工、保留策略表、内存态三分类、备份与恢复；
+      同步修掉正文里已经过时的存储描述（`agent-memory.sqlite` / `proposals/*.json` / `history/` / `stepview-agent.sqlite`）。
+- [x] 更新 `README.md` 的数据说明：数据目录从多个文件变为两个库，并补上备份与恢复。
+- [x] 提交：`docs: document the database layer`
+
+**尚未完成，值得单独一次改动**
+
+- [ ] 画布写入的乐观并发校验（Phase 5 挪过来的第三条）：保存时带上读到的 `revision`，对不上就拒绝并让前端提示冲突。
+      `board_documents.revision` 已经在每次保存时自增，缺的是把 revision 传到前端、以及写入时的比对与冲突提示。
+- [ ] 移除 `electron/db/boardExport.js` 的 JSON 镜像，并改写 `tests/boardStorage.test.js` 里那几条刻意冻结的文件断言。
 
 ## 迁移规则
 

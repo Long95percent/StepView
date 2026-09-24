@@ -56,7 +56,6 @@ const RULES = [
 const DEBT = [
   { file: "electron/preflight.js", rules: ["sqlite-driver", "fs-write", "raw-sql"], permanent: true, reason: "环境自检探针，需要真实探测 SQLite 可写与驱动可用" },
   { file: "electron/redisManager.js", rules: ["fs-write"], permanent: true, reason: "负责探测与拉起本机 Redis 进程" },
-  { file: "src/main.jsx", rules: ["plaintext-password"], removeIn: "Phase 5", reason: "浏览器模式把明文密码写进了 localStorage" },
 ];
 
 function walk(dir, collected = []) {
@@ -141,10 +140,10 @@ describe("database layer boundary", () => {
   });
 
   it("points every remaining exemption at a phase in the plan", () => {
-    const temporary = DEBT.filter((entry) => !entry.permanent);
-    expect(temporary.length).toBeGreaterThan(0);
-    for (const entry of temporary) {
-      expect(entry.removeIn).toMatch(/^Phase \d+$/);
+    // Phase 5 之后豁免名单只剩永久项；以后如果再放临时豁免进来，必须写明移除阶段。
+    for (const entry of DEBT.filter((candidate) => !candidate.permanent)) {
+      expect(entry.removeIn, `${entry.file} 必须标注移除阶段`).toMatch(/^Phase \d+$/);
+      expect(entry.reason).toBeTruthy();
     }
   });
 });

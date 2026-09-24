@@ -42,11 +42,10 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
+import { getBrowserAccountStore } from "./browserAccountStore";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
-const BROWSER_ACCOUNTS_KEY = "stepview-browser-accounts-v1";
-const BROWSER_CURRENT_ACCOUNT_KEY = "stepview-browser-current-account-v1";
 const SETTINGS_KEY = "stepview-settings-v1";
 const emoji = (codePoint) => String.fromCodePoint(codePoint);
 const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
@@ -56,36 +55,6 @@ const EMPTY_AGENT_JOURNAL = {
 };
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
 const desktopApi = window.stepview || createBrowserGatewayApi();
-
-function createBrowserAccountId() {
-  if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    const bytes = new Uint8Array(16);
-    globalThis.crypto.getRandomValues(bytes);
-    return `browser-${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
-  }
-  return `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-const browserAccountApi = {
-  async registerAccount({ username, password, displayName }) {
-    const accounts = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]");
-    const normalizedUsername = username.trim().toLowerCase();
-    if (accounts.some((account) => account.username === normalizedUsername)) throw new Error("Username is already registered.");
-    const account = { accountId: createBrowserAccountId(), username: normalizedUsername, displayName: displayName?.trim() || normalizedUsername };
-    localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify([...accounts, { ...account, password }]));
-    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(account));
-    return account;
-  },
-  async login({ username, password }) {
-    const normalizedUsername = username.trim().toLowerCase();
-    const account = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]").find((candidate) => candidate.username === normalizedUsername && candidate.password === password);
-    if (!account) throw new Error("Invalid username or password.");
-    const safeAccount = { accountId: account.accountId, username: account.username, displayName: account.displayName };
-    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(safeAccount));
-    return safeAccount;
-  },
-};
 
 function GatewayLogin({ api, onAuthenticated }) {
   const [registering, setRegistering] = React.useState(false);
@@ -201,11 +170,25 @@ function App() {
   const agentMessageListRef = React.useRef(null);
 
   React.useEffect(() => {
-    if (!desktopApi?.getGatewayInfo) return;
-    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => {
-      console.error("Failed to load gateway info", error);
-      setGatewayInfo({ mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
-    });
+    let cancelled = false;
+    async function boot() {
+      // 浏览器模式的历史明文密码先擦干净；擦到过就强制重新登录一次。
+      try {
+        const migration = await getBrowserAccountStore().migratePlaintextPasswords();
+        if (migration.forcedLogout && !cancelled) setToast("浏览器模式不再保存明文密码，请用原来的密码重新登录一次。");
+      } catch (error) {
+        console.error("Failed to clear stored browser passwords", error);
+      }
+      if (cancelled || !desktopApi?.getGatewayInfo) return;
+      desktopApi.getGatewayInfo().then((info) => {
+        if (!cancelled) setGatewayInfo(info);
+      }).catch((error) => {
+        console.error("Failed to load gateway info", error);
+        if (!cancelled) setGatewayInfo({ mode: "browser", account: getBrowserAccountStore().currentAccount() });
+      });
+    }
+    boot();
+    return () => { cancelled = true; };
   }, []);
 
   React.useEffect(() => {
@@ -735,7 +718,7 @@ function App() {
 
   const logoutAccount = async () => {
     if (gatewayInfo.mode === "browser") {
-      localStorage.removeItem(BROWSER_CURRENT_ACCOUNT_KEY);
+      getBrowserAccountStore().logout();
     } else {
       await desktopApi.logout();
     }
@@ -763,7 +746,7 @@ function App() {
     desktopApi && !gatewayInfo
       ? <main className="gatewayLogin"><p>Loading...</p></main>
       : !gatewayInfo.account
-        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? browserAccountApi : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
+        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? getBrowserAccountStore() : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
         : (
     <main className="shell">
       <aside className="sidebar">

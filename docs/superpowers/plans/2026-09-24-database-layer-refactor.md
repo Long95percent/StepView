@@ -380,16 +380,28 @@ Phase 7 提供显式导出/备份命令之后，一起移除镜像并改写这�
 它牵连 `memory_evidence` / `memory_embeddings` / `memory_relations` 三张子表，删错就是永久丢用户数据，
 值得单独评审一次，不塞进这次重构里顺手做。
 
-**边界豁免名单现状**：只剩两条永久豁免（`preflight.js` 环境探测、`redisManager.js` 拉起本机 Redis）
-和一条 Phase 5 待办（`src/main.jsx` 的明文密码）。Phase 3 与 Phase 4 一共删掉了 7 条。
+**边界豁免名单现状**：只剩两条永久豁免（`preflight.js` 环境探测、`redisManager.js` 拉起本机 Redis）。
+Phase 3、4、5 一共删掉了 8 条。
 
-### Phase 5：前端存储收口与安全修复
+### Phase 5：前端存储收口与安全修复 ✅
 
-- [ ] 移除浏览器模式在 localStorage 中保存明文密码的行为。改为只保存会话令牌，或明确降级为"每次输入密码"。
-- [ ] 已存在的明文密码记录在首次加载时主动清除，并提示用户重新登录。
-- [ ] 前端画布缓存改为带 revision 校验：只有服务端 revision 更高才覆盖，避免多标签页互相覆盖。
-- [ ] 测试：`tests/browserGatewayApi.test.js` 覆盖登录流程不再写入密码字段。
-- [ ] 提交：`fix: stop persisting plaintext passwords in browser mode`
+- [x] 浏览器模式的账号存储移出 `src/main.jsx`，独立成 `src/browserAccountStore.js`（这样才能被测试）。
+- [x] 移除在 localStorage 中保存明文密码的行为：只保存 PBKDF2-SHA256 派生值（16 字节随机盐 + 12 万次迭代，恒定时间比较）。
+      - 浏览器没有 WebCrypto（非安全上下文）时不退回明文，而是不保存校验值、登录不校验：
+        本地模式本来就没有真正的安全边界，值得守住的只有"不要把用户会复用到别处的口令留在浏览器里"。
+- [x] 已存在的明文密码记录在首次加载时主动清除：趁还能读到明文就派生出等价校验值（用户仍然用原来的密码登录），
+      随后强制退出当前会话并提示重新登录一次。
+- [x] 测试：`tests/browserAccountStore.test.js` 覆盖"存储里不再出现密码字段"、旧记录迁移后旧密码仍然可用、
+      迁移可重复执行、以及没有 WebCrypto 时也不落明文。
+- [x] 验证：`npm test`（253 通过）+ `npm run build`。
+- [x] 提交：`fix: stop persisting plaintext passwords in browser mode`
+
+**偏差说明：原第三条"前端画布缓存改为带 revision 校验"没有在本阶段做，已挪到 Phase 7。**
+"只有服务端 revision 更高才覆盖"其实挡不住真正的多标签页互相覆盖——那是**写入冲突**：
+标签页 A 拿着几分钟前的画布继续保存，会把标签页 B 刚落库的内容整块盖掉。
+要真正解决，得在保存时做乐观并发校验（revision 对不上就拒绝），再配一套前端的冲突提示；
+只在读缓存时加个 revision 判断，既挡不住覆盖，又会破坏"保存失败后浏览器备份能救回来"这条恢复路径。
+所以这件事和 Phase 7 的导出/恢复一起做，不在这里塞半个方案。
 
 ### Phase 6：日记板块
 

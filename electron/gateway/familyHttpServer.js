@@ -9,6 +9,10 @@ import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
 import { completeChatWithTools } from "../agentChatCompletion.js";
 import { secretHint } from "../secretBox.js";
 import { createLoginThrottle } from "./loginThrottle.js";
+import { createRedisProbe } from "./redisProbe.js";
+import { createLogger } from "../logging.js";
+import { checkDataDir, summarizeReadiness } from "../db/readiness.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * 跨域响应头。
@@ -126,7 +130,20 @@ function diaryListOptions(url) {
   };
 }
 
-export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools, contextCacheFactory = createContextCache, loginThrottleFactory = createLoginThrottle } = {}) {
+export function createFamilyHttpServer({
+  config,
+  dataDir,
+  accountStoreFactory = createAccountStore,
+  accountContextFactory = createAccountContext,
+  openAiStream = streamOpenAIChat,
+  openAiComplete = completeChatWithTools,
+  contextCacheFactory = createContextCache,
+  loginThrottleFactory = createLoginThrottle,
+  redisProbeFactory = createRedisProbe,
+  dataDirCheckFactory = checkDataDir,
+  logger = createLogger(),
+  now = () => Date.now(),
+} = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
   const contexts = contextCacheFactory();
@@ -135,6 +152,9 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
   // 退避桶只在内存里，定期清掉过期的，别让长期运行的历史 IP 慢慢堆着。
   const throttleSweep = setInterval(() => loginThrottle.sweep(), 5 * 60 * 1000);
   throttleSweep.unref?.();
+  const startedAt = now();
+  // 只有 readyz 用它，结果自带缓存，正常请求不碰 Redis。
+  const redisProbe = redisProbeFactory({ url: config?.redisUrl });
   // 本文件里的 json(...) 都写成 `json(response, status, payload, origin)`，
   // 这里按 origin 现算 CORS 头，调用点不用改。
   const json = (response, status, payload, origin) => sendJson(response, status, payload, corsHeaders(origin, allowedOrigins));
@@ -161,6 +181,8 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     const sessionId = sessionFrom(request);
     const account = accountStore.getAccountForSession(sessionId);
     if (!account) throw Object.assign(new Error("Authentication required."), { statusCode: 401 });
+    // 记在 request 上，请求日志就能带上"这是谁干的"。
+    request.accountId = account.accountId;
     contexts.sweep();
     let context = contexts.get(account.accountId);
     if (!context) {
@@ -208,11 +230,30 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
   }
 
   const server = http.createServer(async (request, response) => {
+    const startedMs = now();
+    // 请求 id：反代（Caddy/Nginx）或客户端已经带就沿用，方便把一整套日志串起来。
+    const requestId = String(request.headers["x-request-id"] || "").trim().slice(0, 64) || randomUUID();
+    request.requestId = requestId;
+    response.setHeader("X-Request-Id", requestId);
     const origin = request.headers.origin || "";
-    if (request.method === "OPTIONS") return json(response, 204, {}, origin);
-    const url = new URL(request.url, "http://gateway.local");
+    const path = String(request.url || "").split("?")[0];
+    let failed = null;
     try {
+      if (request.method === "OPTIONS") return json(response, 204, {}, origin);
+      const url = new URL(request.url, "http://gateway.local");
       if (request.method === "GET" && url.pathname === "/api/health") return json(response, 200, { ok: true, mode: "family" }, origin);
+      // 就绪探针：给负载均衡/运维脚本用。health 只回答"进程活着"，
+      // readyz 才回答"现在能不能服务"——数据目录写得进去吗、全局库读得出来吗、Redis 降级了没。
+      if (request.method === "GET" && url.pathname === "/api/readyz") {
+        const check = summarizeReadiness({
+          dataDir: dataDirCheckFactory({ dataDir }),
+          database: accountStore.checkReadiness?.() ?? { ok: true },
+          redis: await redisProbe.check(),
+          startedAt,
+          now,
+        });
+        return json(response, check.ok ? 200 : 503, check, origin);
+      }
       if (request.method === "POST" && url.pathname === "/api/agent/chat/stream") return await streamAgent(request, response, origin);
       if (request.method === "GET" && url.pathname === "/api/gateway") {
         const sessionId = sessionFrom(request);
@@ -396,7 +437,22 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     } catch (error) {
       // 带上 code：界面要靠它区分"版本冲突（重新载入）"和"输入不合法（改内容）"，
       // 只靠 HTTP 状态码不够精确，而且这里和 IPC 通道要能被同一组用例对拍。
-      return json(response, error.statusCode || 500, { error: error.message || "Gateway request failed.", code: error.code || null }, origin);
+      const status = error.statusCode || 500;
+      if (status >= 500) failed = error;
+      return json(response, status, { error: error.message || "Gateway request failed.", code: error.code || null }, origin);
+    } finally {
+      // 一条请求一行。5xx 单独再记一条 error，方便按 level 告警。
+      const fields = {
+        requestId,
+        method: request.method,
+        path,
+        status: response.statusCode,
+        ms: now() - startedMs,
+        accountId: request.accountId || null,
+        ip: clientIp(request),
+      };
+      logger.info("http_request", fields);
+      if (failed) logger.error("http_request_failed", { ...fields, error: failed });
     }
   });
 

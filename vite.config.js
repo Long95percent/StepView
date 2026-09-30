@@ -12,6 +12,10 @@ import { defineConfig } from "vite";
  * 整个项目没有别的 vite 配置，这个文件只放代理。
  */
 export default defineConfig({
+  // 测试里不要往 stdout 刷请求日志：断言看的是行为，不是日志。
+  test: {
+    env: { STEPVIEW_LOG_LEVEL: "silent" },
+  },
   server: {
     proxy: {
       "/api": {

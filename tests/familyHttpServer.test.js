@@ -6,6 +6,7 @@ import { createFamilyHttpServer } from "../electron/gateway/familyHttpServer.js"
 import { createAccountContext } from "../electron/gateway/accountContext.js";
 import { createAccountStore } from "../electron/gateway/accountStore.js";
 import { createLoginThrottle } from "../electron/gateway/loginThrottle.js";
+import { createLogger } from "../electron/logging.js";
 import { buildTask } from "../src/progressCore.js";
 
 describe("family HTTP gateway", () => {
@@ -629,5 +630,82 @@ describe("family HTTP gateway", () => {
     // 彻底删除是真的删行（回收站里也不该再留着）。
     expect(await fetch(`${baseUrl}/diary/${created.diaryId}`, { headers }).then((response) => response.status)).toBe(404);
     expect(await fetch(`${baseUrl}/diary`, { headers }).then((response) => response.json())).toEqual([]);
+  });
+});
+
+describe("gateway 可观测性", () => {
+  let tempDir;
+  let gateway;
+
+  afterEach(async () => {
+    await gateway?.close();
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+  });
+
+  function startServer({ redisOk = true, dataDirCheck } = {}) {
+    const lines = [];
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      // 断言看的是"有没有这条日志、字段对不对"，不是把日志打到测试输出里。
+      logger: createLogger({ stream: { write: (chunk) => lines.push(JSON.parse(chunk)) }, now: () => new Date("2026-01-02T03:04:05.000Z") }),
+      redisProbeFactory: () => ({ check: async () => (redisOk ? { ok: true, latencyMs: 1, error: null } : { ok: false, latencyMs: 1, error: "connect ECONNREFUSED" }) }),
+      ...(dataDirCheck ? { dataDirCheckFactory: dataDirCheck } : {}),
+    });
+    return lines;
+  }
+
+  it("readyz 报告数据目录、数据库和 Redis 的降级情况", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-readyz-"));
+    startServer({ redisOk: false });
+    const address = await gateway.listen();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/readyz`);
+    const body = await response.json();
+
+    // Redis 只是缓存，挂了不能算不就绪，否则一个可选组件就能把整个服务摘下线。
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ ok: true, degraded: ["redis"] });
+    expect(body.checks.dataDir.ok).toBe(true);
+    expect(body.checks.database.ok).toBe(true);
+    expect(body.checks.redis.ok).toBe(false);
+  });
+
+  it("数据目录写不进去时 readyz 返回 503", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-readyz-"));
+    startServer({ dataDirCheck: () => ({ ok: false, writable: false, error: "EROFS" }) });
+    const address = await gateway.listen();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/readyz`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ ok: false });
+  });
+
+  it("每个请求都带 request id，并留下一条访问日志", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-readyz-"));
+    const lines = startServer();
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    const response = await fetch(`${baseUrl}/health`, { headers: { "X-Request-Id": "req-from-proxy" } });
+    expect(response.headers.get("x-request-id")).toBe("req-from-proxy");
+    expect(lines.find((line) => line.event === "http_request")).toMatchObject({
+      requestId: "req-from-proxy",
+      method: "GET",
+      path: "/api/health",
+      status: 200,
+    });
+
+    // 没带 id 的请求自己生成一个，仍然可追踪。
+    const generated = await fetch(`${baseUrl}/health`);
+    expect(generated.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("5xx 除了访问日志还额外记一条 error", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-readyz-"));
+    const lines = startServer({ dataDirCheck: () => { throw new Error("探针炸了"); } });
+    const address = await gateway.listen();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/readyz`);
+    expect(response.status).toBe(500);
+    expect(lines.find((line) => line.event === "http_request").status).toBe(500);
+    expect(lines.find((line) => line.event === "http_request_failed").error.message).toBe("探针炸了");
   });
 });

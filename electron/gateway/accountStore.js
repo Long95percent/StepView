@@ -3,6 +3,7 @@ import { openGlobalDatabase } from "../db/index.js";
 import { createDatabaseMaintenance } from "../db/maintenance.js";
 import { createAccountRepository } from "../db/repositories/accountRepository.js";
 import { GLOBAL_RETENTION_RULES } from "../db/retention.js";
+import { checkDatabase } from "../db/readiness.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -139,6 +140,8 @@ export function createAccountStore({ dataDir, dbPath, sessionTtlHours = 168 } = 
 
   return {
     dbPath: database.dbPath,
+    // 给 readyz 用：读得出来就算就绪。SQL 在 db 层（db/readiness.js），这里只转发。
+    checkReadiness: () => checkDatabase({ connection: database }),
     registerAccount,
     login,
     createSession,

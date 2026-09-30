@@ -15,9 +15,17 @@ function withStatus(statusCode, error) {
   return error;
 }
 
-function normalize(input) {
+/**
+ * 校验并补全一条日记。
+ *
+ * `now` 必须显式传进来：`normalizeDiaryInput` 在没给 `occurredAt` 时拿它当默认时间，
+ * 而服务层的 `now` 是可以注入的时钟。不传就变成"用真实墙上时间算 occurredDay、
+ * 用注入时钟写 createdAt"——一次调用两个时钟，跨零点就会写出一条日期自相矛盾的日记，
+ * 测试里也测不动这条路径（本文件曾经就是这样，一个用例靠"真实日期刚好等于夹具日期"才过）。
+ */
+function normalize(input, { now: nowValue } = {}) {
   try {
-    return normalizeDiaryInput(input);
+    return normalizeDiaryInput(input, nowValue ? { now: nowValue } : {});
   } catch (error) {
     if (error instanceof DiaryInputError) throw withStatus(400, error);
     throw error;
@@ -49,7 +57,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
   }
 
   function create(input) {
-    return repository.create(normalize({ ...input, source: input?.source ?? "manual" }), { now: now() });
+    // 一次调用只取一次时钟：occurredDay 和 createdAt 必须来自同一个瞬间。
+    const at = now();
+    return repository.create(normalize({ ...input, source: input?.source ?? "manual" }, { now: at }), { now: at });
   }
 
   /**
@@ -57,7 +67,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
    *
    * 更新和"生成待确认提案"都要做这一步，放一起保证两边算出来的结果一模一样。
    */
-  function mergeEntry(diaryId, input = {}) {
+  function mergeEntry(diaryId, input = {}, { now: nowValue = now() } = {}) {
     const current = requireEntry(diaryId, repository.get(diaryId));
     const merged = normalize({
       // kind 必须一起带上：漏了它，编辑一条节点日记会把它静默降级成每日日记，
@@ -71,7 +81,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
       source: input.source ?? current.source,
       tags: input.tags ?? current.tags,
       links: input.links ?? repository.listLinks(diaryId),
-    });
+    }, { now: nowValue });
     return { current, merged };
   }
 
@@ -82,8 +92,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
    * input.rev 是乐观锁：交回读到的版本号，版本对不上会报冲突而不是盖掉别人的修改。
    */
   function update(diaryId, input = {}, { expectedRev = input?.rev, reason = "update" } = {}) {
-    const { current, merged } = mergeEntry(diaryId, input);
-    return requireEntry(diaryId, repository.update(diaryId, merged, { expectedRev: expectedRev ?? current.rev, reason, now: now() }));
+    const at = now();
+    const { current, merged } = mergeEntry(diaryId, input, { now: at });
+    return requireEntry(diaryId, repository.update(diaryId, merged, { expectedRev: expectedRev ?? current.rev, reason, now: at }));
   }
 
   function entryLabel(entry) {
@@ -124,9 +135,10 @@ export function createDiaryService({ repository, accountId, now = () => new Date
   function planChange(input = {}, { operation } = {}) {
     const op = String(operation || input.operation || "create").trim();
     const reason = String(input.reason ?? "").trim().slice(0, 500);
+    const at = now();
 
     if (op === "create") {
-      const entry = normalize({ ...input, source: input.source ?? "agent" });
+      const entry = normalize({ ...input, source: input.source ?? "agent" }, { now: at });
       const label = kindLabel(entry.kind);
       return {
         type: "diary_change",
@@ -139,7 +151,7 @@ export function createDiaryService({ repository, accountId, now = () => new Date
     }
 
     if (op === "update") {
-      const { current, merged } = mergeEntry(input.diaryId, input);
+      const { current, merged } = mergeEntry(input.diaryId, input, { now: at });
       const lines = changeLines(current, merged);
       if (lines.length === 0) throw withStatus(400, new DiaryInputError("这次修改没有任何变化。", { field: "content" }));
       return {
@@ -165,8 +177,9 @@ export function createDiaryService({ repository, accountId, now = () => new Date
       return update(proposal.diaryId, proposal.entry ?? {}, { expectedRev: proposal.rev, reason: "approval" });
     }
     if (proposal.operation === "diary.create") {
-      const entry = normalize({ ...(proposal.entry ?? {}), source: proposal.entry?.source ?? "agent" });
-      return repository.create(entry, { reason: "approval", now: now() });
+      const at = now();
+      const entry = normalize({ ...(proposal.entry ?? {}), source: proposal.entry?.source ?? "agent" }, { now: at });
+      return repository.create(entry, { reason: "approval", now: at });
     }
     throw withStatus(400, new DiaryInputError(`不支持的日记操作：${proposal.operation || "(空)"}`, { field: "operation" }));
   }
@@ -319,6 +332,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
 
     let created = 0;
     const importedNodeIds = [];
+    // 一整批导入发生在同一个瞬间：逐条现取时钟会让同一批里的 createdAt 各不相同。
+    const at = now();
     for (const item of pending) {
       repository.create(
         normalize({
@@ -331,8 +346,8 @@ export function createDiaryService({ repository, accountId, now = () => new Date
           // 否则"历史导入的是节点日记、新导入的却是每日日记"会当场自相矛盾。
           kind: "node",
           links: [{ targetType: "node", targetId: item.nodeId, taskId: item.taskId, role: "primary", createdBy: "user" }],
-        }),
-        { reason: "import-node-note", now: now() },
+        }, { now: at }),
+        { reason: "import-node-note", now: at },
       );
       importedNodeIds.push(item.nodeId);
       created += 1;

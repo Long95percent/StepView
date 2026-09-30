@@ -55,6 +55,19 @@ describe("diary service", () => {
     expect(service.timeline({ limit: 10 })[0]).toMatchObject({ diaryId: created.diaryId, title: "第一篇" });
   });
 
+  it("dates a new entry by the injected clock, not by the wall clock", () => {
+    // 没给 occurredAt 时，occurredAt / occurredDay / createdAt 必须全部来自注入的时钟。
+    // 只要有一处偷用真实时间，这条就会在某个日期之后突然变红——
+    // 之前这里就漏过：normalize 没拿到时钟，断言里的 "2026-09-24" 是靠真实日期刚好相同才过的。
+    const created = service.create({ content: "没写时间就用现在", timezone: "Asia/Shanghai" });
+    expect(created).toMatchObject({
+      occurredAt: NOW.toISOString(),
+      occurredDay: "2026-09-24",
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    });
+  });
+
   it("merges partial updates and keeps the revision bumping", () => {
     const created = service.create({ title: "标题", content: "正文", tags: ["a"] });
     const updated = service.update(created.diaryId, { title: "新标题" }, { expectedRev: created.rev });

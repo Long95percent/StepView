@@ -22,12 +22,17 @@ import { createApprovalService } from "../agent/approvalService.js";
 import { openAccountDatabase } from "../db/index.js";
 import { createDatabaseMaintenance } from "../db/maintenance.js";
 import { createApprovalRepository } from "../db/repositories/approvalRepository.js";
+import { createAccountSettingsRepository } from "../db/repositories/accountSettingsRepository.js";
+import { createSecretKeyStore } from "../db/secretKeyStore.js";
+import { createSecretBox } from "../secretBox.js";
+import { createSettingsService } from "../settingsService.js";
 
 export function createAccountContext({
   account,
   accountsDir,
   dataDir: explicitDataDir,
   mode = "family",
+  secretKey = "",
   boardStorageFactory = createBoardStorage,
   agentSessionRepositoryFactory = createAgentSessionRepository,
   redisCacheFactory = createRedisAgentCache,
@@ -46,6 +51,14 @@ export function createAccountContext({
   // 日记先建出来：画布保存时要拿它给"被删掉的节点"打孤儿标记。
   const diaryRepository = createDiaryRepository({ connection: database, accountId: account.accountId });
   const diaryService = createDiaryService({ repository: diaryRepository, accountId: account.accountId });
+  // 设置属于账号数据，所以和画布、日记一样落在账号库里（以前在全局表里，账号之间互相可见）。
+  const settingsRepository = createAccountSettingsRepository({ connection: database });
+  // 密钥优先取 STEPVIEW_SECRET_KEY；没配就落在本账号目录下的 secret.key（0600），
+  // 这样桌面版和本地开发不必先配环境变量。生产环境应当显式设置，理由见 secretBox.js。
+  const settingsService = createSettingsService({
+    repository: settingsRepository,
+    secretBox: createSecretBox({ secret: secretKey, keyStore: createSecretKeyStore({ dataDir }) }),
+  });
   const boardStorage = boardStorageFactory({
     dataDir,
     repository: createBoardRepository({ connection: database }),
@@ -80,6 +93,8 @@ export function createAccountContext({
     agentSqliteStore,
     diaryRepository,
     diaryService,
+    settingsRepository,
+    settingsService,
     memoryRepository,
     memoryPlugins,
     memoryExtractor,

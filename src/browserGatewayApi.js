@@ -107,6 +107,7 @@ export function createBrowserGatewayApi() {
     loadBoard: () => request("/board"),
     loadSettings: () => request("/settings"),
     saveSettings: (settings) => request("/settings", { method: "PUT", body: settings }),
+    importLegacySettings: () => request("/settings/import-legacy", { method: "POST" }),
     saveBoard: (board) => request("/board", { method: "PUT", body: board }),
     loadAgentJournal: () => request("/agent/journal"),
     listAgentApprovals: () => request("/agent/approvals"),

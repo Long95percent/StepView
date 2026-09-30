@@ -7,6 +7,7 @@ import { createContextCache } from "./contextCache.js";
 import { streamOpenAIChat } from "../openAiStream.js";
 import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
 import { completeChatWithTools } from "../agentChatCompletion.js";
+import { secretHint } from "../secretBox.js";
 
 /**
  * 跨域响应头。
@@ -76,6 +77,18 @@ function serializeSessionViews(views) {
   return { sessions: Object.fromEntries(Object.entries(views || {}).map(([id, view]) => [id, serializeSessionView(view)])), updatedAt: new Date().toISOString() };
 }
 
+/** 老版本把设置存进全局表（`gateway_settings`）。那张表没有 account_id，所以这些值没有归属。 */
+const LEGACY_GLOBAL_SETTING_KEYS = ["openaiApiKey", "openaiBaseUrl", "agentModel"];
+
+function readLegacyGlobalSettings(accountStore) {
+  const found = {};
+  for (const key of LEGACY_GLOBAL_SETTING_KEYS) {
+    const value = accountStore.getSetting(key);
+    if (value) found[key] = value;
+  }
+  return found;
+}
+
 async function askOpenAI({ apiKey, model, baseUrl, messages, tools, runTool, complete = completeChatWithTools }) {
   if (!String(apiKey || "").trim()) throw Object.assign(new Error("Missing OpenAI API key."), { statusCode: 400 });
   try {
@@ -109,6 +122,24 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
   // 这里按 origin 现算 CORS 头，调用点不用改。
   const json = (response, status, payload, origin) => sendJson(response, status, payload, corsHeaders(origin, allowedOrigins));
 
+  /**
+   * 这次请求该用哪把 API Key。
+   *
+   * 顺序：请求里显式带的（迁移期兼容、以及测试注入）→ 这个账号自己存的 → 老版本的全局 Key。
+   *
+   * 最后那一段是过渡用的，而且**只给 owner**：老数据没有归属，自动分给哪个账号都是越权，
+   * 所以只让 owner 继续用，并在设置页提示他显式认领
+   * （`POST /api/settings/import-legacy`）。认领完，这段连带全局表里的那几行就能删了。
+   */
+  function resolveApiKey({ account, context, requestApiKey }) {
+    const explicit = String(requestApiKey || "").trim();
+    if (explicit) return explicit;
+    const stored = context.settingsService.readApiKey();
+    if (stored) return stored;
+    if (account?.role === "owner") return String(accountStore.getSetting("openaiApiKey") || "").trim();
+    return "";
+  }
+
   function authenticated(request) {
     const sessionId = sessionFrom(request);
     const account = accountStore.getAccountForSession(sessionId);
@@ -116,15 +147,16 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     contexts.sweep();
     let context = contexts.get(account.accountId);
     if (!context) {
-      context = accountContextFactory({ account, accountsDir: path.join(dataDir, "accounts") });
+      context = accountContextFactory({ account, accountsDir: path.join(dataDir, "accounts"), secretKey: config.secretKey });
       contexts.set(account.accountId, context);
     }
     return { sessionId, account, context };
   }
 
   async function streamAgent(request, response, origin) {
-    const { context } = authenticated(request);
+    const { account, context } = authenticated(request);
     const input = await readBody(request);
+    input.apiKey = resolveApiKey({ account, context, requestApiKey: input.apiKey });
     const userText = String(input.userText || "").trim();
     const sessionId = String(input.sessionId || "").trim();
     if (!userText || !sessionId || sessionId === "global") throw Object.assign(new Error("请选择一条活跃任务线会话。"), { statusCode: 400 });
@@ -170,14 +202,39 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         return json(response, 200, { mode: "family", account: accountStore.getAccountForSession(sessionId) }, origin);
       }
       if (request.method === "GET" && url.pathname === "/api/settings") {
-        authenticated(request);
-        return json(response, 200, { openaiApiKey: accountStore.getSetting("openaiApiKey"), openaiBaseUrl: accountStore.getSetting("openaiBaseUrl"), agentModel: accountStore.getSetting("agentModel") }, origin);
+        const { account, context } = authenticated(request);
+        const view = context.settingsService.readForClient();
+        const legacy = account.role === "owner" ? readLegacyGlobalSettings(accountStore) : {};
+        // owner 暂时还在吃老数据里的那把 Key（见 resolveApiKey）。界面要说实话：
+        // 明明能用却显示"未配置"，用户会跑去重新填一遍。
+        const usingLegacy = !view.hasOpenAiKey && Boolean(legacy.openaiApiKey);
+        return json(response, 200, {
+          ...view,
+          hasOpenAiKey: view.hasOpenAiKey || usingLegacy,
+          openaiApiKeyHint: view.openaiApiKeyHint || (usingLegacy ? secretHint(legacy.openaiApiKey) : ""),
+          // 老数据没有归属信息，所以只告诉 owner"有这么一份"，由他决定要不要认领，
+          // 不自动搬——搬给谁都是一次猜测，猜错就是一次越权。
+          legacyGlobalSettingsAvailable: Object.keys(legacy).length > 0,
+        }, origin);
       }
       if (request.method === "PUT" && url.pathname === "/api/settings") {
-        authenticated(request);
+        const { context } = authenticated(request);
         const input = await readBody(request);
-        for (const key of ["openaiApiKey", "openaiBaseUrl", "agentModel"]) if (input[key] !== undefined) accountStore.setSetting(key, input[key]);
-        return json(response, 200, { ok: true }, origin);
+        // 直接回新状态：界面保存后不需要再 GET 一次，两条通道（HTTP / IPC）形状一致。
+        return json(response, 200, context.settingsService.save(input), origin);
+      }
+      if (request.method === "POST" && url.pathname === "/api/settings/import-legacy") {
+        const { account, context } = authenticated(request);
+        if (account.role !== "owner") throw Object.assign(new Error("只有 owner 可以认领旧版本的全局设置。"), { statusCode: 403 });
+        const legacy = readLegacyGlobalSettings(accountStore);
+        // 认领 = 搬进自己的账号（Key 在这里被加密），然后把全局那几行删掉。
+        const settings = context.settingsService.save({
+          agentModel: legacy.agentModel,
+          openaiBaseUrl: legacy.openaiBaseUrl,
+          openaiApiKey: legacy.openaiApiKey,
+        });
+        for (const key of Object.keys(legacy)) accountStore.setSetting(key, "");
+        return json(response, 200, { ok: true, imported: Object.keys(legacy), settings: { ...settings, legacyGlobalSettingsAvailable: false } }, origin);
       }
       if (request.method === "POST" && url.pathname === "/api/accounts/register") {
         if (!config.allowRegistration) throw Object.assign(new Error("Registration is disabled."), { statusCode: 403 });
@@ -274,8 +331,9 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         return json(response, 200, result, origin);
       }
       if (request.method === "POST" && url.pathname === "/api/agent/chat") {
-        const { context } = authenticated(request);
+        const { account, context } = authenticated(request);
         const input = await readBody(request);
+        input.apiKey = resolveApiKey({ account, context, requestApiKey: input.apiKey });
         const userText = String(input.userText || "").trim();
         const sessionId = String(input.sessionId || "").trim();
         if (!userText || !sessionId || sessionId === "global") throw Object.assign(new Error("请选择一条活跃任务线会话。"), { statusCode: 400 });

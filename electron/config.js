@@ -13,6 +13,7 @@ const DEFAULTS = {
   httpPort: 3210,
   bindHost: "127.0.0.1",
   allowedOrigins: "",
+  secretKey: "",
   allowLan: false,
   enableUpnp: false,
   redisUrl: "redis://127.0.0.1:6379/0",
@@ -87,6 +88,8 @@ export function loadConfig({ env = process.env, envFilePath = path.resolve(proce
     httpPort: positiveNumber(values.STEPVIEW_HTTP_PORT ?? DEFAULTS.httpPort, "STEPVIEW_HTTP_PORT"),
     bindHost: values.STEPVIEW_BIND_HOST || DEFAULTS.bindHost,
     allowedOrigins: originList(values.STEPVIEW_ALLOWED_ORIGINS ?? DEFAULTS.allowedOrigins),
+    // 用来加密落库的 API Key（见 electron/secretBox.js）。不进数据库，只从环境来。
+    secretKey: values.STEPVIEW_SECRET_KEY || DEFAULTS.secretKey,
     allowLan: booleanValue(values.STEPVIEW_ALLOW_LAN ?? DEFAULTS.allowLan, "STEPVIEW_ALLOW_LAN"),
     enableUpnp: booleanValue(values.STEPVIEW_ENABLE_UPNP ?? DEFAULTS.enableUpnp, "STEPVIEW_ENABLE_UPNP"),
     redisUrl: values.REDIS_URL || DEFAULTS.redisUrl,

@@ -902,6 +902,35 @@ button { cursor: pointer; }
   font-size: 12px;
   font-weight: 750;
 }
+/* 设置页里那些"要用户做决定"的说明块：旧数据认领、加密密钥来源。 */
+.settingsNotice,
+.settingsHint {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settingsNotice {
+  border: 1px solid rgba(255, 209, 128, .28);
+  color: #ffe4b0;
+  background: linear-gradient(160deg, rgba(74, 54, 18, .5), rgba(28, 22, 14, .55));
+}
+.settingsHint {
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: #9fb0cc;
+  background: rgba(255, 255, 255, .04);
+}
+.settingsHint code {
+  padding: 1px 5px;
+  border-radius: 6px;
+  color: #cfe6ff;
+  background: rgba(255, 255, 255, .1);
+  font-size: 11px;
+}
 .tutorialPanel {
   width: min(560px, calc(100vw - 40px));
   display: grid;

@@ -59,7 +59,17 @@ const EMPTY_AGENT_JOURNAL = {
   sessions: {},
   updatedAt: null,
 };
-const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
+const DEFAULT_SETTINGS = {
+  agentModel: "gpt-5.1",
+  // openaiApiKey 只承载"这一次要保存的新值"，以及浏览器模式（没有服务端）下的真实值。
+  // 服务端模式下它永远是空串：Key 存在账号库里，出库只出"有没有"和尾四位。
+  openaiApiKey: "",
+  openaiBaseUrl: "https://api.openai.com/v1",
+  hasOpenAiKey: false,
+  openaiApiKeyHint: "",
+  legacyGlobalSettingsAvailable: false,
+  secretKeyFromEnv: true,
+};
 const desktopApi = window.stepview || createBrowserGatewayApi();
 
 /**
@@ -240,23 +250,51 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
+  /**
+   * 设置的来源。
+   *
+   * 有服务端（家庭模式、桌面模式）就以服务端为准：设置和画布、日记一样是账号数据，
+   * 存在账号库里、Key 加密落库。只有"纯浏览器模式"（根本没有服务端的那种）才把
+   * 本地备份当唯一副本。
+   */
   React.useEffect(() => {
     const accountId = currentAccountId(gatewayInfo);
     if (!accountId) return;
-    if (gatewayInfo.mode === "family") {
-      if (!desktopApi?.loadSettings) return;
-      desktopApi.loadSettings().then((saved) => {
-        const next = { ...DEFAULT_SETTINGS, ...saved };
-        setSettings(next);
-        setSettingsDraft(next);
-        saveAccountSettingsBackup(accountId, next);
-      }).catch((error) => console.error("Failed to load shared settings", error));
+    const local = loadAccountSettings(accountId);
+    if (gatewayInfo.mode === "browser" || !desktopApi?.loadSettings) {
+      setSettings(local);
+      setSettingsDraft(local);
       return;
     }
-    // 非家庭模式没有服务端设置，这个账号自己的本地备份就是它的设置。
-    const next = loadAccountSettings(accountId);
-    setSettings(next);
-    setSettingsDraft(next);
+
+    let cancelled = false;
+    desktopApi.loadSettings().then(async (saved) => {
+      let next = { ...DEFAULT_SETTINGS, ...saved, openaiApiKey: "" };
+      // 一次性迁移：老版本把 Key 存在浏览器里（那时服务端要么是全局明文表、要么根本没存）。
+      // 服务端说"这个账号没有 Key"、而本地备份里有一把，就把它搬进账号库；
+      // 搬完这次会把本地那份也擦掉，所以只会发生一次。
+      if (!next.hasOpenAiKey && local?.openaiApiKey) {
+        try {
+          next = { ...next, ...(await desktopApi.saveSettings({ openaiApiKey: local.openaiApiKey })) };
+          if (!cancelled) setToast("已把浏览器里保存的 API Key 迁移到账号里。");
+        } catch (error) {
+          console.error("Failed to migrate the browser API key into the account", error);
+        }
+      }
+      if (cancelled) return;
+      const clean = { ...next, openaiApiKey: "" };
+      setSettings(clean);
+      setSettingsDraft(clean);
+      saveAccountSettingsBackup(accountId, clean);
+    }).catch((error) => {
+      console.error("Failed to load settings", error);
+      // 读不到就用这个账号自己的浏览器备份顶着，总比把设置清空好。
+      if (!cancelled) {
+        setSettings(local);
+        setSettingsDraft(local);
+      }
+    });
+    return () => { cancelled = true; };
   }, [gatewayInfo]);
 
   /**
@@ -280,18 +318,84 @@ function App() {
     desktopApi.listAccounts().then(setAccounts).catch((error) => console.error("Failed to load accounts", error));
   }, [gatewayInfo]);
 
+  const usesServerSettings = gatewayInfo?.mode !== "browser" && Boolean(desktopApi?.saveSettings);
+
+  /** 当前账号到底有没有可用的 Key。服务端说"有"就等于有，界面不需要看到明文。 */
+  const hasApiKey = usesServerSettings ? Boolean(settings.hasOpenAiKey) : Boolean(settings.openaiApiKey);
+
+  /**
+   * 保存设置。
+   *
+   * 关键点：界面**看不到**已存的 Key，所以输入框空着只代表"没打算改它"，
+   * 不代表"要清空"。空值时干脆不传这个字段，由服务端按"保持不变"处理。
+   * 真要清空得按"清除"，那会显式传 null。
+   */
   const saveSettings = async (event) => {
     event.preventDefault();
-    const nextSettings = {
+    const typedKey = settingsDraft.openaiApiKey.trim();
+    const common = {
       agentModel: settingsDraft.agentModel.trim() || DEFAULT_SETTINGS.agentModel,
-      openaiApiKey: settingsDraft.openaiApiKey.trim(),
       openaiBaseUrl: settingsDraft.openaiBaseUrl.trim() || DEFAULT_SETTINGS.openaiBaseUrl,
     };
-    saveAccountSettingsBackup(currentAccountId(gatewayInfo), nextSettings);
-    if (gatewayInfo?.mode === "family" && desktopApi?.saveSettings) await desktopApi.saveSettings(nextSettings);
-    setSettings(nextSettings);
+
+    if (usesServerSettings) {
+      try {
+        const payload = typedKey ? { ...common, openaiApiKey: typedKey } : common;
+        const saved = await desktopApi.saveSettings(payload);
+        const next = { ...DEFAULT_SETTINGS, ...saved, openaiApiKey: "" };
+        setSettings(next);
+        setSettingsDraft(next);
+        saveAccountSettingsBackup(currentAccountId(gatewayInfo), next);
+        setSettingsOpen(false);
+        setToast("设置已保存。");
+      } catch (error) {
+        setToast(error.message || "设置保存失败。");
+      }
+      return;
+    }
+
+    // 纯浏览器模式：本地备份就是唯一副本。
+    const next = { ...settings, ...common, openaiApiKey: typedKey, hasOpenAiKey: Boolean(typedKey) };
+    saveAccountSettingsBackup(currentAccountId(gatewayInfo), next);
+    setSettings(next);
+    setSettingsDraft(next);
     setSettingsOpen(false);
     setToast("设置已保存。");
+  };
+
+  const clearApiKey = async () => {
+    if (usesServerSettings) {
+      try {
+        const saved = await desktopApi.saveSettings({ openaiApiKey: null });
+        const next = { ...DEFAULT_SETTINGS, ...saved, openaiApiKey: "" };
+        setSettings(next);
+        setSettingsDraft(next);
+        saveAccountSettingsBackup(currentAccountId(gatewayInfo), next);
+        setToast("已清除保存的 API Key。");
+      } catch (error) {
+        setToast(error.message || "清除失败。");
+      }
+      return;
+    }
+    const next = { ...settings, openaiApiKey: "", hasOpenAiKey: false };
+    saveAccountSettingsBackup(currentAccountId(gatewayInfo), next);
+    setSettings(next);
+    setSettingsDraft(next);
+    setToast("已清除保存的 API Key。");
+  };
+
+  /** 认领老版本存在全局表里的设置（只有 owner 会看到这个入口）。 */
+  const importLegacySettings = async () => {
+    try {
+      const result = await desktopApi.importLegacySettings();
+      const next = { ...DEFAULT_SETTINGS, ...(result?.settings || {}), openaiApiKey: "" };
+      setSettings(next);
+      setSettingsDraft(next);
+      saveAccountSettingsBackup(currentAccountId(gatewayInfo), next);
+      setToast("已把旧版本的设置导入到你的账号。");
+    } catch (error) {
+      setToast(error.message || "导入失败。");
+    }
   };
 
   const openSettings = () => {
@@ -591,7 +695,7 @@ function App() {
       showToast("Agent 后端尚未连接。请使用桌面端运行。");
       return;
     }
-    if (!settings.openaiApiKey.trim()) {
+    if (!hasApiKey) {
       showToast("需要先在 Settings 填写 API Key。");
       openSettings();
       return;
@@ -1332,7 +1436,13 @@ function App() {
             <h2>Settings ⚙️</h2>
           <label>
             API Key
-            <input type="password" value={settingsDraft.openaiApiKey} onChange={(event) => setSettingsDraft({ ...settingsDraft, openaiApiKey: event.target.value })} placeholder="sk-..." />
+            <input
+              type="password"
+              value={settingsDraft.openaiApiKey}
+              onChange={(event) => setSettingsDraft({ ...settingsDraft, openaiApiKey: event.target.value })}
+              // 已存的 Key 不会回传到界面，所以这里只能告诉用户"存过了"以及尾四位。
+              placeholder={settings.hasOpenAiKey ? `已保存 ${settings.openaiApiKeyHint}（留空表示不修改）` : "sk-..."}
+            />
           </label>
           <label>
             默认模型
@@ -1343,9 +1453,24 @@ function App() {
             <input value={settingsDraft.openaiBaseUrl} onChange={(event) => setSettingsDraft({ ...settingsDraft, openaiBaseUrl: event.target.value })} placeholder="https://api.openai.com/v1" />
           </label>
           <div className="modalActions">
+            {settings.hasOpenAiKey && (
+              <button type="button" onClick={clearApiKey}>清除已保存的 Key</button>
+            )}
             <button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button>
             <button className="primary">Save</button>
           </div>
+          {settings.legacyGlobalSettingsAvailable && (
+            <p className="settingsNotice">
+              检测到旧版本保存在服务器全局设置里的 API Key。它没有账号归属，所以不再回传给任何账号。
+              <button type="button" className="ghost" onClick={importLegacySettings}>导入到我的账号</button>
+            </p>
+          )}
+          {usesServerSettings && hasApiKey && !settings.secretKeyFromEnv && (
+            <p className="settingsHint">
+              当前加密密钥来自数据目录里的 <code>secret.key</code>，会跟着数据目录的备份一起走。
+              部署时设置 <code>STEPVIEW_SECRET_KEY</code> 可以让数据库文件单独泄露也解不开。
+            </p>
+          )}
         </form>
       </div>
       )}
@@ -1364,7 +1489,7 @@ function App() {
           </header>
           <div className="agentChatLayout">
             <div className="agentProviderFields">
-              <p>{settings.openaiApiKey ? `已配置 · ${settings.openaiBaseUrl}` : "去 Settings 填写 API Key 和 Base URL 后启用外接 API。"}</p>
+              <p>{hasApiKey ? `已配置 · ${settings.openaiBaseUrl}` : "去 Settings 填写 API Key 和 Base URL 后启用外接 API。"}</p>
               <button className="ghost" type="button" onClick={openSettings}>打开设置</button>
             </div>
             <label>

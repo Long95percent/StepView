@@ -145,6 +145,15 @@ VITE_STEPVIEW_API_URL=https://api.example.com docker compose up -d --build
 
 API Key 和用户自定义 Base URL 保存在浏览器设置中，启动脚本无法读取；模型连通性会在实际发送消息时校验并显示具体主机和网络错误。
 
+设置是**账号数据**：和画布、日记一样存在账号库里，每个账号一份，互相看不到。
+API Key 落库前用 AES-256-GCM 加密，密钥来自 `STEPVIEW_SECRET_KEY`；没配的话会
+自动生成 `dataDir/secret.key`（0600）。本地开发不配也能用，但**部署时必须显式设置**，
+否则密钥会跟着数据目录的备份一起走：
+
+```dotenv
+STEPVIEW_SECRET_KEY=<openssl rand -hex 32>
+```
+
 ## 构建发布包
 
 ```bash

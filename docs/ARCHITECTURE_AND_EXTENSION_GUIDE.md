@@ -559,6 +559,26 @@ Personal 模式使用固定本地账号 `local-personal`；Family 模式使用 G
 - 老版本留下的无归属键无法判断归属，登录进账号后直接删掉。只在服务端有副本的模式下删；
   纯浏览器模式删了就是真丢数据，那边只做到"永远不读"。
 
+### 7.3 设置与密钥（`account_settings`）
+
+设置在账号库里（`accounts/<accountId>/stepview.sqlite` 的 `account_settings` 表），
+和画布、日记同一个边界——**库文件本身就是那堵墙**。以前这三项写在全局库的
+`gateway_settings` 里，而那张表只有 `key` 没有 `account_id`：所有账号共用一份，
+任何登录账号 `GET /api/settings` 都能读到别人填的明文 OpenAI Key。
+
+约定：
+
+- 界面上**永远拿不到明文 Key**。`GET /api/settings` 只回 `hasOpenAiKey` 和尾四位提示；
+  真要用 Key 的地方走 `settingsService.readApiKey()`，只在本进程内流转。
+- 因此"输入框空着"不等于"清掉 Key"。`save({ openaiApiKey: "" })` 与不传这个字段都表示
+  **保持不变**，只有显式传 `null` 才清除。界面另有一个独立的"清除"动作。
+- Key 落库前加密（`electron/secretBox.js`，AES-256-GCM，格式 `v1:<iv>:<tag>:<密文>`）。
+  密钥优先取 `STEPVIEW_SECRET_KEY`；没配则由 `electron/db/secretKeyStore.js` 在数据目录
+  生成 `secret.key`（0600）。**部署时必须显式配置环境变量**，否则密钥会随数据目录的备份一起走。
+- 解密时认不出 `v1:` 前缀的值按明文返回：老版本就是这么存的，读得出来才叫升级。
+- 老版本留在全局表里的那几行没有归属信息，**不自动搬**。只有 owner 会被告知"有这么一份"，
+  由他显式调 `POST /api/settings/import-legacy` 认领；认领=搬进自己账号（加密）+ 清掉全局行。
+
 ## 8. 当前已知限制
 
 - 用户画像和知识库已有仓储能力，但尚未接入完整 UI。

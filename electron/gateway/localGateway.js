@@ -62,6 +62,7 @@ export function createLocalGateway({
         account: { id: PERSONAL_ACCOUNT_ID, accountId: PERSONAL_ACCOUNT_ID },
         dataDir,
         mode: config.mode,
+        secretKey: config.secretKey,
       });
     }
     initialized = true;

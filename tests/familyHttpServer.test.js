@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFamilyHttpServer } from "../electron/gateway/familyHttpServer.js";
 import { createAccountContext } from "../electron/gateway/accountContext.js";
+import { createAccountStore } from "../electron/gateway/accountStore.js";
 import { buildTask } from "../src/progressCore.js";
 
 describe("family HTTP gateway", () => {
@@ -405,7 +406,132 @@ describe("family HTTP gateway", () => {
     expect(health.headers.get("access-control-allow-origin")).toBe(null);
   });
 
+  it("keeps settings inside the account that saved them", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-settings-"));
+    let seenApiKey = null;
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1, secretKey: "test-secret-key-0123456789" },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+      openAiComplete: async ({ apiKey }) => {
+        seenApiKey = apiKey;
+        return { text: "好的。", model: "test-model" };
+      },
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    async function register(username) {
+      const response = await fetch(`${baseUrl}/accounts/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password: "password-1" }),
+      });
+      expect(response.status).toBe(201);
+      return { Authorization: `Bearer ${(await response.json()).sessionId}`, "Content-Type": "application/json" };
+    }
+
+    const alice = await register("alice-keys");
+    const bob = await register("bob-keys");
+
+    await fetch(`${baseUrl}/settings`, { method: "PUT", headers: alice, body: JSON.stringify({ openaiApiKey: "sk-alice-secret-1234", agentModel: "gpt-5.2" }) });
+
+    const aliceView = await fetch(`${baseUrl}/settings`, { headers: alice }).then((response) => response.json());
+    expect(aliceView).toMatchObject({ hasOpenAiKey: true, openaiApiKeyHint: "…1234", agentModel: "gpt-5.2" });
+    // 关键：响应体里绝不能出现明文 Key。
+    expect(JSON.stringify(aliceView)).not.toContain("sk-alice-secret-1234");
+    expect(aliceView.openaiApiKey).toBeUndefined();
+
+    const bobView = await fetch(`${baseUrl}/settings`, { headers: bob }).then((response) => response.json());
+    expect(bobView).toMatchObject({ hasOpenAiKey: false, openaiApiKeyHint: "" });
+    expect(JSON.stringify(bobView)).not.toContain("sk-alice-secret");
+    // 连 agentModel 也不该串（以前这两个是从同一张全局表读的）。
+    expect(bobView.agentModel).not.toBe("gpt-5.2");
+
+    // 界面上拿不到明文 Key，所以请求里不带 apiKey 是正常路径：服务端要用账号里存的那把。
+    const task = buildTask("设置隔离任务", { x: 100, y: 100 });
+    await fetch(`${baseUrl}/board`, { method: "PUT", headers: alice, body: JSON.stringify({ tasks: [task] }) });
+    const chat = await fetch(`${baseUrl}/agent/chat`, {
+      method: "POST",
+      headers: alice,
+      body: JSON.stringify({ sessionId: `task:${task.id}`, userText: "在吗" }),
+    });
+    expect(chat.status, await chat.text()).toBe(200);
+    expect(seenApiKey).toBe("sk-alice-secret-1234");
+  });
+
+  it("lets only the owner claim the legacy global settings", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-legacy-"));
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1, secretKey: "test-secret-key-0123456789" },
+      dataDir: tempDir,
+      // 老版本把设置写在全局表里（只有 key、没有 account_id）。这里手动放一份进去复现那个状态。
+      accountStoreFactory: (options) => {
+        const store = createAccountStore(options);
+        store.setSetting("openaiApiKey", "sk-legacy-global-key-9999");
+        return store;
+      },
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    async function register(username) {
+      const response = await fetch(`${baseUrl}/accounts/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password: "password-1" }),
+      });
+      expect(response.status).toBe(201);
+      return { Authorization: `Bearer ${(await response.json()).sessionId}`, "Content-Type": "application/json" };
+    }
+
+    const owner = await register("legacy-owner");
+    const member = await register("legacy-member");
+
+    // owner 暂时靠老数据活着：界面必须说"已配置"，否则他会以为 Key 丢了去重填一遍。
+    const ownerView = await fetch(`${baseUrl}/settings`, { headers: owner }).then((response) => response.json());
+    expect(ownerView).toMatchObject({ hasOpenAiKey: true, legacyGlobalSettingsAvailable: true });
+    expect(JSON.stringify(ownerView)).not.toContain("sk-legacy-global-key");
+
+    // 别人既看不到、也不该被告知"有这么一份"。
+    const memberView = await fetch(`${baseUrl}/settings`, { headers: member }).then((response) => response.json());
+    expect(memberView).toMatchObject({ hasOpenAiKey: false, legacyGlobalSettingsAvailable: false });
+    expect(JSON.stringify(memberView)).not.toContain("sk-legacy");
+
+    const forbidden = await fetch(`${baseUrl}/settings/import-legacy`, { method: "POST", headers: member });
+    expect(forbidden.status).toBe(403);
+
+    const imported = await fetch(`${baseUrl}/settings/import-legacy`, { method: "POST", headers: owner }).then((response) => response.json());
+    expect(imported.imported).toContain("openaiApiKey");
+    expect(imported.settings).toMatchObject({ hasOpenAiKey: true, legacyGlobalSettingsAvailable: false });
+    // 认领之后老的那行要被清掉，全局表里不再留着明文。
+    expect(JSON.stringify(imported)).not.toContain("sk-legacy-global-key");
+
+    const afterClaim = await fetch(`${baseUrl}/settings`, { headers: owner }).then((response) => response.json());
+    expect(afterClaim).toMatchObject({ hasOpenAiKey: true, legacyGlobalSettingsAvailable: false });
+  });
+
   it("accepts the browser preflight for DELETE so entries can be trashed and purged", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-delete-"));
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-delete-"));
     gateway = createFamilyHttpServer({
       // 这条用例专门验"跨源时预检有没有放行 DELETE"，所以显式开一个白名单。

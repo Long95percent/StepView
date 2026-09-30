@@ -68,6 +68,22 @@ async function loadCurrentBoardMemory() {
   return buildAgentMemory(board);
 }
 
+/**
+ * 这次请求用哪把 API Key。
+ *
+ * 请求里带了就用请求的（老版本是界面存着 Key 再发过来的）；没带就用当前账号存的那把。
+ * 界面已经拿不到明文 Key 了，所以这条兜底是正常路径，不是补丁。
+ */
+function resolveApiKey(request = {}) {
+  const explicit = String(request.apiKey || "").trim();
+  if (explicit) return explicit;
+  try {
+    return gateway.getContext().settingsService.readApiKey();
+  } catch {
+    return "";
+  }
+}
+
 async function askOpenAIWithMessages({
   apiKey,
   model,
@@ -132,6 +148,15 @@ app.whenReady().then(async () => {
   ipcMain.handle("board:load", () => gateway.loadBoard());
   ipcMain.handle("board:save", (_event, board) => gateway.saveBoard(board));
   ipcMain.handle("gateway:info", () => ({ mode: gateway.getMode(), account: gateway.getCurrentAccount() }));
+  // 设置走账号库（见 electron/settingsService.js）：桌面模式和家庭模式同一个仓储，
+  // 于是"桌面模式好好的、家庭模式串号"这类分裂不会再出现。返回的形状里没有明文 Key。
+  ipcMain.handle("settings:load", () => gateway.getContext().settingsService.readForClient());
+  ipcMain.handle("settings:save", (_event, input = {}) => gateway.getContext().settingsService.save(input));
+  // 旧版本的全局设置是家庭模式那条路写下的；桌面模式从来没有过这份数据，
+  // 所以这里不是"没实现"，而是确实没有东西可导。界面也不会显示这个入口。
+  ipcMain.handle("settings:import-legacy", () => {
+    throw new Error("桌面模式没有需要导入的旧设置。");
+  });
   ipcMain.handle("account:list", () => gateway.listAccounts());
   ipcMain.handle("account:register", (_event, input) => gateway.registerAccount(input));
   ipcMain.handle("account:login", (_event, input) => gateway.login(input));
@@ -271,7 +296,7 @@ app.whenReady().then(async () => {
     });
     try {
       const result = await askOpenAIWithMessages({
-        apiKey: request.apiKey,
+        apiKey: resolveApiKey(request),
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
@@ -316,7 +341,7 @@ app.whenReady().then(async () => {
     const prepared = await activeContext.agentService.prepareChat({ sessionId, userText, boardMemory: memory, model: request.model || DEFAULT_OPENAI_MODEL });
     try {
       const result = await streamOpenAIChat({
-        apiKey: request.apiKey,
+        apiKey: resolveApiKey(request),
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
@@ -342,7 +367,7 @@ app.whenReady().then(async () => {
     const memory = request.memory || {};
 
     return askOpenAIWithMessages({
-      apiKey: request.apiKey,
+      apiKey: resolveApiKey(request),
       model: request.model,
       baseUrl: request.baseUrl,
       messages: [

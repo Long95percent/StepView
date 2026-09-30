@@ -12,6 +12,7 @@ const DEFAULTS = {
   sessionTtlHours: 168,
   httpPort: 3210,
   bindHost: "127.0.0.1",
+  allowedOrigins: "",
   allowLan: false,
   enableUpnp: false,
   redisUrl: "redis://127.0.0.1:6379/0",
@@ -47,6 +48,20 @@ function positiveNumber(value, key) {
   return parsed;
 }
 
+/**
+ * 逗号分隔的跨域白名单。
+ *
+ * 默认**空**，也就是"不发任何 CORS 响应头"。正常部署里前端和网关同源
+ * （都走同一个反向代理），浏览器压根不发跨域请求，不需要白名单。
+ * 只有前端确实部署在另一个源时，才在这里列出它。
+ */
+function originList(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
 export function loadConfig({ env = process.env, envFilePath = path.resolve(process.cwd(), ".env.local"), fsApi = fs } = {}) {
   let fileEnv = {};
   try {
@@ -71,6 +86,7 @@ export function loadConfig({ env = process.env, envFilePath = path.resolve(proce
     sessionTtlHours: positiveNumber(values.STEPVIEW_SESSION_TTL_HOURS ?? DEFAULTS.sessionTtlHours, "STEPVIEW_SESSION_TTL_HOURS"),
     httpPort: positiveNumber(values.STEPVIEW_HTTP_PORT ?? DEFAULTS.httpPort, "STEPVIEW_HTTP_PORT"),
     bindHost: values.STEPVIEW_BIND_HOST || DEFAULTS.bindHost,
+    allowedOrigins: originList(values.STEPVIEW_ALLOWED_ORIGINS ?? DEFAULTS.allowedOrigins),
     allowLan: booleanValue(values.STEPVIEW_ALLOW_LAN ?? DEFAULTS.allowLan, "STEPVIEW_ALLOW_LAN"),
     enableUpnp: booleanValue(values.STEPVIEW_ENABLE_UPNP ?? DEFAULTS.enableUpnp, "STEPVIEW_ENABLE_UPNP"),
     redisUrl: values.REDIS_URL || DEFAULTS.redisUrl,

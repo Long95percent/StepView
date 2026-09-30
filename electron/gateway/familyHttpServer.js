@@ -8,15 +8,35 @@ import { streamOpenAIChat } from "../openAiStream.js";
 import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
 import { completeChatWithTools } from "../agentChatCompletion.js";
 
-function json(response, status, payload, origin) {
-  response.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": origin || "null",
+/**
+ * 跨域响应头。
+ *
+ * 默认**什么都不发**：正常部署下前端和网关同源（都走同一个反向代理），
+ * 浏览器不会发跨域请求，CORS 头纯属多余。老版本无条件把请求里的 Origin
+ * 反射回去，等于告诉任何第三方站点"你可以读我的响应"——同源部署下白送一个口子。
+ *
+ * 只有确实跨源部署时才通过 STEPVIEW_ALLOWED_ORIGINS 显式列出，且必须完全匹配。
+ * 白名单非空时要无条件带 `Vary: Origin`：命中与不命中的响应体不一样，
+ * 中间层缓存不能把两者混起来。
+ */
+function corsHeaders(origin, allowedOrigins) {
+  if (!allowedOrigins?.size) return {};
+  const headers = { Vary: "Origin" };
+  if (!origin || !allowedOrigins.has(origin)) return headers;
+  return {
+    ...headers,
+    "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
     // DELETE 必须列出来：浏览器的预检只看这张表，漏了它，删除日记/彻底删除在浏览器里
     // 会直接报 "Failed to fetch"，而请求根本没到服务端。
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    Vary: "Origin",
+  };
+}
+
+function sendJson(response, status, payload, headers = {}) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    ...headers,
   });
   response.end(JSON.stringify(payload));
 }
@@ -84,6 +104,10 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
   const contexts = contextCacheFactory();
+  const allowedOrigins = new Set(config.allowedOrigins || []);
+  // 本文件里的 json(...) 都写成 `json(response, status, payload, origin)`，
+  // 这里按 origin 现算 CORS 头，调用点不用改。
+  const json = (response, status, payload, origin) => sendJson(response, status, payload, corsHeaders(origin, allowedOrigins));
 
   function authenticated(request) {
     const sessionId = sessionFrom(request);
@@ -112,8 +136,7 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": origin || "null",
-      Vary: "Origin",
+      ...corsHeaders(origin, allowedOrigins),
     });
     const send = (event) => response.write(`data: ${JSON.stringify(event)}\n\n`);
     try {

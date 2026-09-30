@@ -15,4 +15,10 @@ describe("network policy", () => {
     expect(() => validateNetworkPolicy({ mode: "family", host: "0.0.0.0" })).toThrow();
     expect(validateNetworkPolicy({ mode: "family", host: "0.0.0.0", containerized: true })).toMatchObject({ containerized: true });
   });
+  it("refuses a wildcard cross-origin allowlist", () => {
+    // `*` 等于没有白名单，只是写得更隐蔽。
+    expect(() => validateNetworkPolicy({ mode: "family", allowedOrigins: ["*"] })).toThrow();
+    expect(() => validateNetworkPolicy({ mode: "family", allowedOrigins: ["https://*.example.com"] })).toThrow();
+    expect(validateNetworkPolicy({ mode: "family", allowedOrigins: ["https://a.example"] }).mode).toBe("family");
+  });
 });

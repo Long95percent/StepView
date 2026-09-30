@@ -27,13 +27,18 @@ services:
       STEPVIEW_CONTAINERIZED: "true"
       STEPVIEW_ALLOW_REGISTRATION: ${STEPVIEW_ALLOW_REGISTRATION:-true}
       STEPVIEW_SESSION_TTL_HOURS: ${STEPVIEW_SESSION_TTL_HOURS:-168}
+      # 跨域白名单，默认空 = 不发任何 CORS 头。前端经 web 容器同源访问，
+      # 正常部署不需要配。只有前端确实在另一个源时才填。
+      STEPVIEW_ALLOWED_ORIGINS: ${STEPVIEW_ALLOWED_ORIGINS:-}
       REDIS_URL: redis://redis:6379/0
       MEM0_API_KEY: ${MEM0_API_KEY:-}
       MEM0_BASE_URL: ${MEM0_BASE_URL:-https://api.mem0.ai/v1}
     volumes:
       - ./.stepview-family-data:/data
-    ports:
-      - "${STEPVIEW_BIND_ADDRESS:-127.0.0.1}:3210:3210"
+    # 只在内网可达：浏览器一律经 web 容器的 Nginx 反代访问 /api，
+    # 网关端口不发布到宿主机，公网上没有第二个入口。
+    expose:
+      - "3210"
     depends_on:
       redis:
         condition: service_healthy

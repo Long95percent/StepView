@@ -371,10 +371,45 @@ describe("family HTTP gateway", () => {
     expect(timeline).toEqual([expect.objectContaining({ title: "Agent 写的节点日记", kind: "node" })]);
   });
 
+  it("sends no CORS headers unless the origin is explicitly allowed", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-cors-"));
+    gateway = createFamilyHttpServer({
+      // 默认没有白名单：同源部署下浏览器不发跨域请求，就不该有任何 CORS 头。
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+
+    // 老版本会把请求里的 Origin 原样反射回去，等于谁问都答"你能读我"。
+    const preflight = await fetch(`${baseUrl}/diary/anything`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "DELETE" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(null);
+    expect(preflight.headers.get("access-control-allow-methods")).toBe(null);
+
+    const health = await fetch(`${baseUrl}/health`, { headers: { Origin: "https://evil.example" } });
+    expect(health.status).toBe(200);
+    expect(health.headers.get("access-control-allow-origin")).toBe(null);
+  });
+
   it("accepts the browser preflight for DELETE so entries can be trashed and purged", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-delete-"));
     gateway = createFamilyHttpServer({
-      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      // 这条用例专门验"跨源时预检有没有放行 DELETE"，所以显式开一个白名单。
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1, allowedOrigins: ["http://localhost:5173"] },
       dataDir: tempDir,
       accountContextFactory: (options) => createAccountContext({
         ...options,

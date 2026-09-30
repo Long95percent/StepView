@@ -122,7 +122,10 @@ npm run family:logs
 
 账号、Board 和 SQLite 数据保存在 `.stepview-family-data`；Redis AOF 保存在 `.stepview-runtime/redis`。`family:stop` 和 `family:down` 都不会删除这些目录。
 
-本机默认访问 `http://127.0.0.1:5173`。如需让局域网设备访问，在项目根目录创建 `.env`：
+本机默认访问 `http://127.0.0.1:5173`。**只有 web 这一个端口需要可达**：
+网关（3210）只存在于 Compose 内网，浏览器一律通过 `web` 的 Nginx 以同源 `/api` 访问它。
+
+如需让局域网设备访问，在项目根目录创建 `.env`：
 
 ```dotenv
 STEPVIEW_BIND_ADDRESS=192.168.1.10

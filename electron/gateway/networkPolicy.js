@@ -1,8 +1,10 @@
 import net from "node:net";
 
 function isLoopback(host) { return host === "localhost" || host === "127.0.0.1" || host === "::1"; }
-export function validateNetworkPolicy({ mode = "personal", host = "127.0.0.1", allowLan = false, enableUpnp = false, containerized = false } = {}) {
+export function validateNetworkPolicy({ mode = "personal", host = "127.0.0.1", allowLan = false, enableUpnp = false, containerized = false, allowedOrigins = [] } = {}) {
   if (enableUpnp) throw new Error("UPnP and port mapping are disabled.");
+  // 通配 Origin 等于没有白名单，只是换了个更难看出来的写法。
+  if (allowedOrigins.some((origin) => String(origin).includes("*"))) throw new Error("Cross-origin allowlist must list exact origins; wildcards are not allowed.");
   if (containerized && mode === "family" && host === "0.0.0.0") return { mode, host, allowLan: Boolean(allowLan), enableUpnp: false, containerized: true };
   if (mode === "personal" && !isLoopback(host)) throw new Error("Personal mode requires loopback binding.");
   if (mode === "family" && !allowLan && !isLoopback(host)) throw new Error("Family mode without LAN sharing requires loopback binding.");

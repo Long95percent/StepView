@@ -1,6 +1,6 @@
 # StepView 服务器部署改造计划
 
-> 状态：**执行中**。D1、D2、D3、D4 已完成（各自独立提交），D5-D6 待做。
+> 状态：**执行中**。D1-D5 已完成（各自独立提交），D6 待做。
 > 前置阅读：`docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md` 第 7 节（数据隔离和目录约定）。
 > 目标：从"只能在本机跑"变成"能放到一台公网服务器上，多个账号互不干扰、别人打不进来"。
 > 本文只描述要改什么、为什么、怎么验收；具体代码改动在各 Phase 里。
@@ -193,6 +193,24 @@
 
 **验收**：镜像内 `whoami` 不是 root；镜像里搜不到 `.stepview-family-data`。
 
+**实际做法**：
+- 基础镜像按**摘要**固定（`node:22-bookworm-slim@sha256:83f4…`、`nginx:1.27-alpine@sha256:6564…`、
+  `redis:7.4-alpine@sha256:ff02…`）。tag 会随上游发版改变内容，摘要不会；`Dockerfile` 顶部写了升级时怎么查新摘要。
+- 网关 `USER node`，`COPY --chown=node:node`，`ENV HOME=/app`；实测 `process.getuid() === 1000`。
+  顺带确认了**服务端一个 npm 依赖都没有**（全部 `node:` 内置，SQLite 走 `node:sqlite`），
+  所以镜像里没有 `node_modules`，`/app` 总共 892K——原来那套 `npm ci` 本来就只服务前端。
+- 前端构建阶段加了 `--omit=dev`：`electron` / `electron-builder` 是 devDependencies，容器里只构建网页，不需要它们
+  （少装一大半，构建快很多、也不那么容易在慢网络下超时）。同时加了 `NPM_REGISTRY` 构建参数
+  （默认官方源，compose 透传），国内部署可以换镜像源——这是实测出来的痛点：本机跑官方源超时、跑 npmmirror 秒回。
+- web 改成非 root 的 nginx：监听 8080（1024 以下只有 root 能绑）、`pid` 挪到 `/tmp`、
+  `chown` 缓存目录，`USER nginx`；`compose.yaml` 的宿主机端口仍是 5173（`:5173:8080`），对外没有变化。
+- `.dockerignore` 补齐：数据目录（`.stepview-family-data` / `.stepview-personal-data` / `.stepview-runtime`）与
+  `docs` / `tests` / `*.md` 都不进构建上下文；前者是安全底线，后者只是别拖慢构建。
+- 启动器 `requireLocalImages` 的报错文案改成引导 `docker compose pull`（按摘要拉取），不再是裸 `docker pull` tag。
+
+**实测**：用一份真实数据目录的拷贝跑网关容器（非 root、注册关闭），`/api/health` 正常、`POST /api/accounts/register` 返回 403、
+`lsq` 能登录——证明非 root 用户对挂载进去的 SQLite 有读写权限（这条在 Docker Desktop 的 bind mount 上不是理所当然的，所以要实测）。
+
 ### P1-2 备份落异地
 
 **现状**：`VACUUM INTO` 轮转 + 手动导出，都在同一块盘上。盘坏 = 全没。
@@ -232,7 +250,7 @@
 | D2 | CORS 白名单 + compose 只暴露反代 | D1 | ✅ 已完成 |
 | D3 | 设置按账号隔离 + key 加密落库 + 前端脱敏 | 无（独立） | ✅ 已完成 |
 | D4 | 登录退避 + 注册默认关闭 + 建号 CLI | 无（独立） | ✅ 已完成 |
-| D5 | 镜像瘦身 / 非 root / 固定 tag | 无 | 镜像内非 root |
+| D5 | 镜像瘦身 / 非 root / 固定 tag | 无 | ✅ 已完成 |
 | D6 | 异地备份 + 结构化日志 + readyz + 运维文档 | D2 | 备份能在另一台机器恢复出可登录实例 |
 
 **D3 建议优先做**：它是唯一一个"现在就是错的"（越权 + 明文），其余都是"现在没问题、上公网才有问题"。

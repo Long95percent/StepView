@@ -2,7 +2,8 @@ name: stepview
 
 services:
   redis:
-    image: redis:7.4-alpine
+    # 固定摘要：tag 会漂，摘要不会。升级方式见 Dockerfile 顶部的说明。
+    image: redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--protected-mode", "no"]
     restart: unless-stopped
     volumes:
@@ -59,9 +60,12 @@ services:
         # 前端默认走同源 /api（nginx 反代到 gateway），一般留空即可。
         # 只有前端与网关不同源时才需要设置。
         VITE_STEPVIEW_API_URL: ${VITE_STEPVIEW_API_URL:-}
+        # 构建前端时装 npm 依赖用的源。国内网络慢就设 NPM_REGISTRY=https://registry.npmmirror.com。
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     ports:
-      - "${STEPVIEW_BIND_ADDRESS:-127.0.0.1}:5173:80"
+      # 容器里的 web 以非 root 运行，监听 8080（见 docker/nginx.conf）。
+      - "${STEPVIEW_BIND_ADDRESS:-127.0.0.1}:5173:8080"
     depends_on:
       gateway:
         condition: service_healthy

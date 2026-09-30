@@ -13,11 +13,13 @@ function requireDocker() {
   return daemon.stdout.trim();
 }
 
+// 基础镜像在 Dockerfile / compose.yaml 里是按摘要（digest）固定的，所以这里按 tag 检查只是
+// "大概率已经有了"的粗筛：真正的依据是 `docker compose pull`，它会把摘要指向的那一层拉下来。
 function requireLocalImages() {
   const requiredImages = ["node:22-bookworm-slim", "nginx:1.27-alpine", "redis:7.4-alpine"];
   const missing = requiredImages.filter((image) => dockerResult(["image", "inspect", image]).status !== 0);
   if (missing.length) {
-    throw new Error(`本机缺少镜像：${missing.join(", ")}。启动器已禁用自动拉取，请先显式执行 docker pull。`);
+    throw new Error(`本机缺少镜像：${missing.join(", ")}。启动器已禁用自动拉取，请先显式执行 docker compose pull（会按 Dockerfile 里固定的摘要拉取）。`);
   }
   return requiredImages;
 }

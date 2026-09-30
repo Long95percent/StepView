@@ -2,7 +2,14 @@ node_modules
 dist
 release
 .git
+.gitignore
+# 数据目录绝不能进镜像：里面是用户的画布、日记和 API Key。
 .stepview-family-data
 .stepview-personal-data
 .stepview-runtime
+# 构建产物用不到的目录，别让它们进构建上下文（慢，而且没有意义）。
+docs
+tests
+coverage
+*.md
 npm-debug.log*

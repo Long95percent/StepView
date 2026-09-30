@@ -87,7 +87,14 @@ http://localhost:5173/
 
 `family` 会检查 Docker Desktop、项目依赖、数据目录和端口，然后构建并启动整套服务。任一必需项不满足时会中止并给出修复方式。
 
-启动器使用 `--pull never`，不会自动连接镜像仓库或拉取镜像。所需基础镜像必须已存在于本机；缺失时会立即报错。需要更新镜像时由用户显式执行 `docker pull`。
+启动器使用 `--pull never`，不会自动连接镜像仓库或拉取镜像。所需基础镜像必须已存在于本机；缺失时会立即报错，
+按提示执行 `docker compose pull` 或 `docker pull` 即可。
+
+基础镜像在 `Dockerfile` / `compose.yaml` 里是按**摘要（digest）**固定的，不是浮动 tag——
+这样重新构建不会悄悄换成上游刚推的新版本。要升级基础镜像时，先 pull 再换掉那串 `sha256:`，注释里写了怎么查。
+
+两个应用容器都以**非 root**运行：网关是 `node` 用户（服务端本来就不需要任何 npm 依赖，镜像里没有 `node_modules`），
+web 是 nginx 自己的 `nginx` 用户、监听 8080（宿主机端口仍然是 5173，不用改）。
 
 - Node.js 22 或更高版本，以及 Node SQLite 支持。
 - npm 核心依赖已完整安装。
@@ -145,6 +152,12 @@ docker compose exec gateway node scripts/create-account.js <用户名> --name="�
 
 ```dotenv
 STEPVIEW_BIND_ADDRESS=192.168.1.10
+```
+
+构建前端时要装 npm 依赖。默认走官方源；国内网络慢或经常超时的话，换镜像源（同一份依赖，只是换个 CDN）：
+
+```dotenv
+NPM_REGISTRY=https://registry.npmmirror.com
 ```
 
 前端默认通过**同源** `/api` 访问网关（开发时由 Vite 代理，容器里由 Nginx 代理），

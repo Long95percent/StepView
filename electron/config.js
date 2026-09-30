@@ -98,3 +98,14 @@ export function loadConfig({ env = process.env, envFilePath = path.resolve(proce
 }
 
 export const defaultConfig = DEFAULTS;
+
+/**
+ * 数据目录到底在哪。
+ *
+ * "数据存在哪"这件事只应该有一处答案：启动脚本、启动自检、建号 CLI 都走这里，
+ * 否则迟早会出现"CLI 建的账号服务端看不见"。
+ */
+export function resolveDataDir({ mode = DEFAULTS.mode, dataDir = "", cwd = process.cwd() } = {}) {
+  if (dataDir) return path.resolve(dataDir);
+  return path.resolve(cwd, mode === "family" ? ".stepview-family-data" : ".stepview-personal-data");
+}

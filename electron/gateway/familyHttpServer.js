@@ -8,6 +8,7 @@ import { streamOpenAIChat } from "../openAiStream.js";
 import { createToolRunner, openAiToolSchemas } from "../agent/toolBridge.js";
 import { completeChatWithTools } from "../agentChatCompletion.js";
 import { secretHint } from "../secretBox.js";
+import { createLoginThrottle } from "./loginThrottle.js";
 
 /**
  * 跨域响应头。
@@ -45,6 +46,18 @@ function sendJson(response, status, payload, headers = {}) {
 function sessionFrom(request) {
   const value = String(request.headers.authorization || "");
   return value.startsWith("Bearer ") ? value.slice(7).trim() : "";
+}
+
+/**
+ * 请求来自哪台机器。
+ *
+ * 网关正常只在 Compose 内网里可达（见 compose.yaml），前面那层反向代理会写
+ * X-Forwarded-For，所以这里信它是安全的。反过来，一旦有人把 3210 直接发布出去，
+ * 这个头就可以随便伪造——退避会随之失效。这是"不要暴露网关端口"的又一个理由。
+ */
+function clientIp(request) {
+  const forwarded = String(request.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || request.socket?.remoteAddress || "";
 }
 
 async function readBody(request) {
@@ -113,11 +126,15 @@ function diaryListOptions(url) {
   };
 }
 
-export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools, contextCacheFactory = createContextCache } = {}) {
+export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = createAccountStore, accountContextFactory = createAccountContext, openAiStream = streamOpenAIChat, openAiComplete = completeChatWithTools, contextCacheFactory = createContextCache, loginThrottleFactory = createLoginThrottle } = {}) {
   if (config?.mode !== "family") throw new Error("Family HTTP server requires STEPVIEW_MODE=family.");
   const accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
   const contexts = contextCacheFactory();
   const allowedOrigins = new Set(config.allowedOrigins || []);
+  const loginThrottle = loginThrottleFactory();
+  // 退避桶只在内存里，定期清掉过期的，别让长期运行的历史 IP 慢慢堆着。
+  const throttleSweep = setInterval(() => loginThrottle.sweep(), 5 * 60 * 1000);
+  throttleSweep.unref?.();
   // 本文件里的 json(...) 都写成 `json(response, status, payload, origin)`，
   // 这里按 origin 现算 CORS 头，调用点不用改。
   const json = (response, status, payload, origin) => sendJson(response, status, payload, corsHeaders(origin, allowedOrigins));
@@ -242,7 +259,25 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
         accountStore.registerAccount(input);
         return json(response, 201, accountStore.login(input), origin);
       }
-      if (request.method === "POST" && url.pathname === "/api/accounts/login") return json(response, 200, accountStore.login(await readBody(request)), origin);
+      if (request.method === "POST" && url.pathname === "/api/accounts/login") {
+        const input = await readBody(request);
+        const attempt = { ip: clientIp(request), username: input.username };
+        const waitSeconds = loginThrottle.blockedFor(attempt);
+        if (waitSeconds > 0) {
+          throw Object.assign(new Error(`登录失败次数过多，请 ${Math.ceil(waitSeconds / 60)} 分钟后再试。`), {
+            statusCode: 429,
+            code: "LOGIN_THROTTLED",
+          });
+        }
+        try {
+          const result = accountStore.login(input);
+          loginThrottle.recordSuccess(attempt);
+          return json(response, 200, result, origin);
+        } catch (error) {
+          loginThrottle.recordFailure(attempt);
+          throw error;
+        }
+      }
       if (request.method === "POST" && url.pathname === "/api/accounts/logout") {
         const { sessionId } = authenticated(request);
         accountStore.logout(sessionId);
@@ -369,6 +404,7 @@ export function createFamilyHttpServer({ config, dataDir, accountStoreFactory = 
     server,
     listen: () => new Promise((resolve, reject) => { server.once("error", reject); server.listen(config.httpPort, config.bindHost, () => resolve(server.address())); }),
     close: async () => {
+      clearInterval(throttleSweep);
       await contexts.closeAll();
       accountStore.close();
       if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

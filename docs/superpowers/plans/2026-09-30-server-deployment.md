@@ -1,6 +1,6 @@
 # StepView 服务器部署改造计划
 
-> 状态：**执行中**。D1、D2、D3 已完成（各自独立提交），D4-D6 待做。
+> 状态：**执行中**。D1、D2、D3、D4 已完成（各自独立提交），D5-D6 待做。
 > 前置阅读：`docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md` 第 7 节（数据隔离和目录约定）。
 > 目标：从"只能在本机跑"变成"能放到一台公网服务器上，多个账号互不干扰、别人打不进来"。
 > 本文只描述要改什么、为什么、怎么验收；具体代码改动在各 Phase 里。
@@ -105,6 +105,16 @@
 
 **验收**：脚本连续打错密码，第 N 次之后开始被拒；正常密码仍能登录；重启进程后退避状态清零（可接受）。
 
+**实际做法**：
+- 新增 `electron/gateway/loginThrottle.js`，两个桶：`IP+用户名`（5 次失败后锁）和 `IP`（20 次，拦住换用户名试），
+  退避时长 15 分钟起步、每多触发一轮翻倍、封顶 1 小时。**只在内存里**，进程重启即清零——
+  写进库等于给攻击者一个"把磁盘写满"的开关。桶有上限（5000）并按 5 分钟清理过期项（`sweep()`）。
+- 客户端 IP 取 `X-Forwarded-For` 第一段（正常部署里网关只在内网、前面是反代，所以可信）；
+  文档同时注明：**一旦把 3210 直接发布出去，这个头就能伪造，退避随之失效**——D2 那条"不暴露网关端口"是这里的前提。
+- 登录失败从"裸 Error → HTTP 500"改成 401 `INVALID_CREDENTIALS`；用户名重复 409 `USERNAME_TAKEN`；
+  用户名/密码格式错误 400。文案仍然不区分"用户不存在"和"密码错"。
+- 超限返回 429 `LOGIN_THROTTLED`，界面按 `code` 显示"请 N 分钟后再试"。
+
 ### P0-5 注册开关默认收紧
 
 **现状**：`config.js:11` `allowRegistration: true`，`compose.yaml` 里也是 `${STEPVIEW_ALLOW_REGISTRATION:-true}`。第一个注册的人自动成为 `owner`（`accountStore.js:56`）。
@@ -115,6 +125,14 @@
 - 提供一条 CLI：`node scripts/create-account.js <username>` 直接建号（跳过 HTTP 注册），这样常态可以一直关着注册。
 
 **验收**：关闭注册后 `POST /api/accounts/register` 返回 403；CLI 仍能建号。
+
+**实际做法**：
+- `compose.yaml` 与 `.env.local.example` 的默认值都改成 `false`（原来是 `true`）。
+- 新增 `scripts/create-account.js`（`npm run account:create -- <用户名>`），走的是和 HTTP 注册同一套
+  `createAccountStore.registerAccount`，不复制密码哈希逻辑；不给 `--password` 就随机生成并只打印一次。
+- 建号 CLI 的数据目录用新的 `resolveDataDir()`（`electron/config.js`），和 `familyServer` / `preflight` 同一处求解——
+  否则迟早出现"CLI 建的账号服务端看不见"。
+- `Dockerfile` 的 gateway 阶段补 `COPY scripts ./scripts`，容器里可以直接跑。
 
 ### P0-6 设置（含 OpenAI key）改成按账号隔离 + 加密落库
 
@@ -213,7 +231,7 @@
 | D1 | 前端同源 `/api` + nginx 反代 + 构建参数 | 无 | ✅ 已完成 |
 | D2 | CORS 白名单 + compose 只暴露反代 | D1 | ✅ 已完成 |
 | D3 | 设置按账号隔离 + key 加密落库 + 前端脱敏 | 无（独立） | ✅ 已完成 |
-| D4 | 登录退避 + 注册默认关闭 + 建号 CLI | 无（独立） | 爆破被拒，注册 403 |
+| D4 | 登录退避 + 注册默认关闭 + 建号 CLI | 无（独立） | ✅ 已完成 |
 | D5 | 镜像瘦身 / 非 root / 固定 tag | 无 | 镜像内非 root |
 | D6 | 异地备份 + 结构化日志 + readyz + 运维文档 | D2 | 备份能在另一台机器恢复出可登录实例 |
 

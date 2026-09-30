@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createFamilyHttpServer } from "../electron/gateway/familyHttpServer.js";
 import { createAccountContext } from "../electron/gateway/accountContext.js";
 import { createAccountStore } from "../electron/gateway/accountStore.js";
+import { createLoginThrottle } from "../electron/gateway/loginThrottle.js";
 import { buildTask } from "../src/progressCore.js";
 
 describe("family HTTP gateway", () => {
@@ -528,6 +529,55 @@ describe("family HTTP gateway", () => {
 
     const afterClaim = await fetch(`${baseUrl}/settings`, { headers: owner }).then((response) => response.json());
     expect(afterClaim).toMatchObject({ hasOpenAiKey: true, legacyGlobalSettingsAvailable: false });
+  });
+
+  it("answers a bad password with 401 and backs off a brute-force run", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-family-throttle-"));
+    gateway = createFamilyHttpServer({
+      config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
+      dataDir: tempDir,
+      // 把阈值调小，免得测试要打十几个请求；退避逻辑本身由 loginThrottle 的用例覆盖。
+      loginThrottleFactory: () => createLoginThrottle({ maxFailures: 3, ipMaxFailures: 50, lockoutMs: 60_000 }),
+      accountContextFactory: (options) => createAccountContext({
+        ...options,
+        redisCacheFactory: () => ({
+          savePromptState: async () => {},
+          saveWindowState: async () => {},
+          loadPromptState: async () => null,
+          loadWindowState: async () => null,
+          close: async () => {},
+        }),
+      }),
+    });
+    const address = await gateway.listen();
+    const baseUrl = `http://127.0.0.1:${address.port}/api`;
+    const login = (password) =>
+      fetch(`${baseUrl}/accounts/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "target", password }),
+      });
+
+    await fetch(`${baseUrl}/accounts/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "target", password: "password-1" }),
+    });
+
+    // 以前这里回的是 500：那是"服务器坏了"的意思，会把界面和监控都带偏。
+    const wrong = await login("wrong-password");
+    expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toMatchObject({ code: "INVALID_CREDENTIALS" });
+
+    await login("wrong-password");
+    await login("wrong-password");
+
+    const throttled = await login("wrong-password");
+    expect(throttled.status).toBe(429);
+    expect((await throttled.json()).code).toBe("LOGIN_THROTTLED");
+
+    // 退避是按"IP + 用户名"算的：连正确密码也要等，否则退避没意义。
+    expect((await login("password-1")).status).toBe(429);
   });
 
   it("accepts the browser preflight for DELETE so entries can be trashed and purged", async () => {

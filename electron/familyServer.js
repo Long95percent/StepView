@@ -1,9 +1,8 @@
-import path from "node:path";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveDataDir } from "./config.js";
 import { createFamilyHttpServer } from "./gateway/familyHttpServer.js";
 
 const config = loadConfig();
-const dataDir = config.dataDir ? path.resolve(config.dataDir) : path.resolve(process.cwd(), ".stepview-family-data");
+const dataDir = resolveDataDir({ mode: config.mode, dataDir: config.dataDir });
 const gateway = createFamilyHttpServer({ config, dataDir });
 const address = await gateway.listen();
 console.log(`StepView family gateway listening on http://${address.address}:${address.port}`);

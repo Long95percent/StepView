@@ -122,6 +122,22 @@ npm run family:logs
 
 账号、Board 和 SQLite 数据保存在 `.stepview-family-data`；Redis AOF 保存在 `.stepview-runtime/redis`。`family:stop` 和 `family:down` 都不会删除这些目录。
 
+### 加账号
+
+网页注册默认是**关闭**的（`STEPVIEW_ALLOW_REGISTRATION=false`）——它是整个应用里唯一一个
+不需要凭据就能写数据的入口，放公网上不该默认开着。加人用服务端命令直接建号：
+
+```bash
+# 容器里建（推荐）
+docker compose exec gateway node scripts/create-account.js <用户名>
+
+# 不给密码就随机生成一个，只打印这一次
+docker compose exec gateway node scripts/create-account.js <用户名> --name="显示名"
+```
+
+只有在完全信任的本地环境想临时放开网页注册时，才在 `.env` 里写
+`STEPVIEW_ALLOW_REGISTRATION=true`，用完记得改回去。第一个注册的账号自动是 `owner`。
+
 本机默认访问 `http://127.0.0.1:5173`。**只有 web 这一个端口需要可达**：
 网关（3210）只存在于 Compose 内网，浏览器一律通过 `web` 的 Nginx 以同源 `/api` 访问它。
 
@@ -143,7 +159,7 @@ VITE_STEPVIEW_API_URL=https://api.example.com npm run build
 VITE_STEPVIEW_API_URL=https://api.example.com docker compose up -d --build
 ```
 
-API Key 和用户自定义 Base URL 保存在浏览器设置中，启动脚本无法读取；模型连通性会在实际发送消息时校验并显示具体主机和网络错误。
+模型连通性会在实际发送消息时校验，并在界面上显示具体的主机和网络错误。
 
 设置是**账号数据**：和画布、日记一样存在账号库里，每个账号一份，互相看不到。
 API Key 落库前用 AES-256-GCM 加密，密钥来自 `STEPVIEW_SECRET_KEY`；没配的话会

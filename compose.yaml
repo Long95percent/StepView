@@ -25,7 +25,10 @@ services:
       STEPVIEW_BIND_HOST: 0.0.0.0
       STEPVIEW_HTTP_PORT: 3210
       STEPVIEW_CONTAINERIZED: "true"
-      STEPVIEW_ALLOW_REGISTRATION: ${STEPVIEW_ALLOW_REGISTRATION:-true}
+      # 默认关闭：注册是整个应用里唯一一个"不需要凭据就能写数据"的入口，
+      # 公网部署不该默认开着。加人用 scripts/create-account.js（见 README）。
+      # 本地想临时放开：在 .env 里写 STEPVIEW_ALLOW_REGISTRATION=true。
+      STEPVIEW_ALLOW_REGISTRATION: ${STEPVIEW_ALLOW_REGISTRATION:-false}
       STEPVIEW_SESSION_TTL_HOURS: ${STEPVIEW_SESSION_TTL_HOURS:-168}
       # 跨域白名单，默认空 = 不发任何 CORS 头。前端经 web 容器同源访问，
       # 正常部署不需要配。只有前端确实在另一个源时才填。

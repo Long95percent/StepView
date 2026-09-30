@@ -13,6 +13,7 @@
         "preflight:family": "node scripts/run-family-docker.js --check",
         "desktop": "node scripts/run-stepview.js --mode=personal",
         "family": "node scripts/run-family-docker.js",
+        "account:create": "node scripts/create-account.js",
         "family:stop": "docker compose stop",
         "family:down": "docker compose down",
         "family:logs": "docker compose logs -f",

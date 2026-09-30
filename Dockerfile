@@ -25,4 +25,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY electron ./electron
 COPY src ./src
+# 建号 CLI：注册默认是关的，加人走 `docker compose exec gateway node scripts/create-account.js`
+# （这样不必把注册接口临时开到公网上）。
+COPY scripts ./scripts
 CMD ["node", "electron/familyServer.js"]

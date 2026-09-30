@@ -4,7 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveDataDir } from "./config.js";
 import { validateNetworkPolicy } from "./gateway/networkPolicy.js";
 import { createRedisClient } from "./agentRedisClient.js";
 
@@ -84,9 +84,7 @@ export async function checkRedis({ url = process.env.REDIS_URL || "redis://127.0
 export async function runPreflight({ mode = process.env.STEPVIEW_MODE || "personal", cwd = process.cwd(), env = process.env, skipRedis = false } = {}) {
   const config = loadConfig({ env: { ...env, STEPVIEW_MODE: mode }, envFilePath: path.join(cwd, ".env.local") });
   validateNetworkPolicy({ mode: config.mode, host: config.bindHost, allowLan: config.allowLan, enableUpnp: config.enableUpnp, containerized: config.containerized, allowedOrigins: config.allowedOrigins });
-  const dataDir = config.dataDir
-    ? path.resolve(config.dataDir)
-    : mode === "family" ? path.join(cwd, ".stepview-family-data") : path.join(cwd, ".stepview-personal-data");
+  const dataDir = resolveDataDir({ mode, dataDir: config.dataDir, cwd });
   const checks = [
     checkNodeVersion(),
     checkDependencies({ cwd }),

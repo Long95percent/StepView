@@ -43,6 +43,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
 import { getBrowserAccountStore } from "./browserAccountStore";
+import { clearLegacyUnscoped, readAccountScoped, writeAccountScoped } from "./accountScopedStorage";
 import { createDiaryApi } from "./diary/diaryApi";
 import { DayDiaryPopover } from "./diary/dayDiaryPopover";
 import { DiariesView } from "./diary/diariesView";
@@ -113,13 +114,25 @@ function GatewayLogin({ api, onAuthenticated }) {
     </main>
   );
 }
-function loadBrowserBoard() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? withFreshAgentMemory(normalizeBoard(JSON.parse(saved))) : INITIAL_BOARD;
-  } catch {
-    return INITIAL_BOARD;
-  }
+/**
+ * 当前登录账号的 id。
+ *
+ * 空串表示"还没有任何账号"——这时任何本地备份都读不到（见 accountScopedStorage）。
+ * 这不是洁癖：localStorage 是整个浏览器共用的，没有归属就不敢碰。
+ */
+function currentAccountId(gatewayInfo) {
+  return String(gatewayInfo?.account?.accountId ?? "").trim();
+}
+
+/** 这个账号自己的看板备份。没有归属、或者不是这个账号的，一律当作没有备份。 */
+function loadBrowserBoard(accountId) {
+  const saved = readAccountScoped(localStorage, STORAGE_KEY, accountId);
+  if (!saved?.value) return INITIAL_BOARD;
+  return withFreshAgentMemory(normalizeBoard(saved.value));
+}
+
+function saveBoardBackup(accountId, snapshot) {
+  return writeAccountScoped(localStorage, STORAGE_KEY, accountId, snapshot);
 }
 
 function withFreshAgentMemory(board) {
@@ -127,13 +140,14 @@ function withFreshAgentMemory(board) {
   return { ...normalized, agentMemory: buildAgentMemory(normalized) };
 }
 
-function loadSettings() {
-  try {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
+/** 这个账号自己的设置备份。设置里带着 OpenAI key，串号比看板串号更严重。 */
+function loadAccountSettings(accountId) {
+  const saved = readAccountScoped(localStorage, SETTINGS_KEY, accountId);
+  return saved?.value ? { ...DEFAULT_SETTINGS, ...saved.value } : DEFAULT_SETTINGS;
+}
+
+function saveAccountSettingsBackup(accountId, next) {
+  return writeAccountScoped(localStorage, SETTINGS_KEY, accountId, next);
 }
 
 function screenToWorld(event, viewport, canvasElement) {
@@ -180,8 +194,10 @@ function App() {
   const [loveRain, setLoveRain] = React.useState([]);
   const [emojiRain, setEmojiRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
-  const [settings, setSettings] = React.useState(loadSettings);
-  const [settingsDraft, setSettingsDraft] = React.useState(loadSettings);
+  // 设置里带着 OpenAI key，所以初值只能是默认值：账号还没确定之前，
+  // 读任何"当前浏览器里的设置"都可能读到上一个账号的 key。
+  const [settings, setSettings] = React.useState(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = React.useState(DEFAULT_SETTINGS);
   const [agentDrawerOpen, setAgentDrawerOpen] = React.useState(false);
   const [agentScopeId, setAgentScopeId] = React.useState("global");
   const [agentQuestion, setAgentQuestion] = React.useState("");
@@ -225,13 +241,38 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (gatewayInfo?.mode !== "family" || !desktopApi?.loadSettings) return;
-    desktopApi.loadSettings().then((saved) => {
-      const next = { ...DEFAULT_SETTINGS, ...saved };
-      setSettings(next);
-      setSettingsDraft(next);
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-    }).catch((error) => console.error("Failed to load shared settings", error));
+    const accountId = currentAccountId(gatewayInfo);
+    if (!accountId) return;
+    if (gatewayInfo.mode === "family") {
+      if (!desktopApi?.loadSettings) return;
+      desktopApi.loadSettings().then((saved) => {
+        const next = { ...DEFAULT_SETTINGS, ...saved };
+        setSettings(next);
+        setSettingsDraft(next);
+        saveAccountSettingsBackup(accountId, next);
+      }).catch((error) => console.error("Failed to load shared settings", error));
+      return;
+    }
+    // 非家庭模式没有服务端设置，这个账号自己的本地备份就是它的设置。
+    const next = loadAccountSettings(accountId);
+    setSettings(next);
+    setSettingsDraft(next);
+  }, [gatewayInfo]);
+
+  /**
+   * 清掉旧版本留下的、没有账号归属的备份。
+   *
+   * 那些键里没有任何归属信息，无法判断是谁写的；留着等于在浏览器里放一份
+   * 谁登录都可能被读到的数据（这次串号事故就是它）。家庭模式下服务端的库才是事实源，
+   * 所以删掉它不会丢任何东西。
+   *
+   * 只在家庭模式删：浏览器模式（根本没有服务端的那种）没有别的副本，
+   * 删了就是真的丢数据，所以那边只做到"永远不读"。
+   */
+  React.useEffect(() => {
+    if (gatewayInfo?.mode !== "family" || !currentAccountId(gatewayInfo)) return;
+    clearLegacyUnscoped(localStorage, STORAGE_KEY);
+    clearLegacyUnscoped(localStorage, SETTINGS_KEY);
   }, [gatewayInfo]);
 
   React.useEffect(() => {
@@ -246,7 +287,7 @@ function App() {
       openaiApiKey: settingsDraft.openaiApiKey.trim(),
       openaiBaseUrl: settingsDraft.openaiBaseUrl.trim() || DEFAULT_SETTINGS.openaiBaseUrl,
     };
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+    saveAccountSettingsBackup(currentAccountId(gatewayInfo), nextSettings);
     if (gatewayInfo?.mode === "family" && desktopApi?.saveSettings) await desktopApi.saveSettings(nextSettings);
     setSettings(nextSettings);
     setSettingsOpen(false);
@@ -260,50 +301,47 @@ function App() {
 
   const persistBoard = React.useCallback((nextBoard) => {
     const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
+    // 备份必须记在当前账号名下：没有账号（还没登录）就不写，免得匿名状态下的看板
+    // 变成下一个登录者的"自己的备份"。
+    const accountId = currentAccountId(gatewayInfo);
     if (gatewayInfo?.mode !== "browser") {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-      } catch (backupError) {
-        console.error("Failed to save browser backup", backupError);
-      }
+      saveBoardBackup(accountId, snapshot);
       desktopApi.saveBoard(snapshot).catch((error) => {
         console.error("Failed to save board", error);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+        if (saveBoardBackup(accountId, snapshot)) {
           setToast("Local file save failed; browser backup saved.");
-        } catch (backupError) {
-          console.error("Failed to save browser backup", backupError);
+        } else {
           setToast("Save failed. Please avoid closing StepView.");
         }
       });
       return;
     }
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-    } catch (error) {
-      console.error("Failed to save board", error);
+    if (!saveBoardBackup(accountId, snapshot)) {
       setToast("Save failed. Please avoid closing StepView.");
     }
-  }, [gatewayInfo?.mode]);
+  }, [gatewayInfo]);
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         if (!gatewayInfo || !gatewayInfo.account) return;
+        const accountId = currentAccountId(gatewayInfo);
         if (gatewayInfo.mode !== "browser") {
-          const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
+          // 只把这个账号自己的备份拿来比对：别人的备份根本读不到，所以
+          // "服务端是空的就回落到本地"这条规则不会再变成一条串号通路。
+          const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard(accountId)));
           if (!cancelled) {
             setBoard(saved);
             persistBoard(saved);
           }
           return;
         }
-        if (!cancelled) setBoard(loadBrowserBoard());
+        if (!cancelled) setBoard(loadBrowserBoard(accountId));
       } catch (error) {
         console.error("Failed to load board", error);
         if (!cancelled) {
-          setBoard(loadBrowserBoard());
+          setBoard(loadBrowserBoard(currentAccountId(gatewayInfo)));
           setToast("Load failed, using browser backup.");
         }
       } finally {

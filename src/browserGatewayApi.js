@@ -1,9 +1,18 @@
 const SESSION_KEY = "stepview-family-session-v1";
 
+/**
+ * 网关地址。
+ *
+ * 默认走**同源** `/api`：正常部署下前端和网关经同一个反向代理出去，
+ * 前端只发同源请求——没有跨域、没有混合内容，网关端口也不用暴露到公网。
+ *
+ * 只有前端和网关确实不同源时才需要 VITE_STEPVIEW_API_URL（构建期变量），
+ * 它是逃生口，不是常规配置。
+ */
 function apiBaseUrl() {
   const configured = import.meta.env.VITE_STEPVIEW_API_URL?.trim();
   if (configured) return configured.replace(/\/+$/, "");
-  return `${window.location.protocol}//${window.location.hostname}:3210/api`;
+  return "/api";
 }
 
 export function createBrowserGatewayApi() {

@@ -128,6 +128,18 @@ npm run family:logs
 STEPVIEW_BIND_ADDRESS=192.168.1.10
 ```
 
+前端默认通过**同源** `/api` 访问网关（开发时由 Vite 代理，容器里由 Nginx 代理），
+所以浏览器只会连 `web` 这一个端口，跨域和混合内容问题都不会出现。
+只有在前端和网关确实不部署在同一个源时，才需要在前端**构建期**配置：
+
+```bash
+# 直接构建
+VITE_STEPVIEW_API_URL=https://api.example.com npm run build
+
+# Docker Compose（compose.yaml 会作为 build arg 传给 web 镜像）
+VITE_STEPVIEW_API_URL=https://api.example.com docker compose up -d --build
+```
+
 API Key 和用户自定义 Base URL 保存在浏览器设置中，启动脚本无法读取；模型连通性会在实际发送消息时校验并显示具体主机和网络错误。
 
 ## 构建发布包

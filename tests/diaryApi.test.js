@@ -39,6 +39,26 @@ function readPreloadDiaryChannels() {
 describe("diary api surface", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("talks to the same origin by default, and only leaves it when told to", async () => {
+    stubBrowserGlobals();
+    const urls = [];
+    vi.stubGlobal("fetch", async (url) => {
+      urls.push(url);
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await createBrowserGatewayApi().diary.listTags();
+    // 默认同源相对路径。部署时前端和网关在同一个反向代理后面，
+    // 这样既没有跨域，也不会有 HTTPS 页面请求 http 端口的混合内容问题。
+    expect(urls).toEqual(["/api/diary/tags"]);
+
+    vi.stubEnv("VITE_STEPVIEW_API_URL", "https://api.example.com/");
+    await createBrowserGatewayApi().diary.listTags();
+    // 逃生口：只有显式配置才离开同源，尾斜杠会被规整掉。
+    expect(urls[1]).toBe("https://api.example.com/diary/tags");
   });
 
   it("keeps the preload namespace, the IPC channels and the browser client in step", () => {
@@ -120,7 +140,9 @@ describe("diary api surface", () => {
     stubBrowserGlobals();
     const requests = [];
     vi.stubGlobal("fetch", async (url, options = {}) => {
-      requests.push([options.method || "GET", new URL(url).pathname + new URL(url).search]);
+      // 请求地址现在是同源的相对路径（/api/...），要补一个 base 才能解析。
+      const resolved = new URL(url, "http://localhost");
+      requests.push([options.method || "GET", resolved.pathname + resolved.search]);
       return { ok: true, status: 200, json: async () => ({}) };
     });
 

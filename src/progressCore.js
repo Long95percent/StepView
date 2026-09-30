@@ -245,6 +245,13 @@ export function hasBoardContent(board) {
   return board.tasks.length > 0 || board.stickers.length > 0 || (board.branches || []).length > 0;
 }
 
+/**
+ * 服务端看板与本地备份二选一。
+ *
+ * "服务端是空的就回落到本地备份"这条规则本身没问题，前提是**两个入参必须属于同一个账号**：
+ * 备份要按账号隔离地读（见 accountScopedStorage），否则一个全新账号会在这里读到上一个
+ * 账号留在浏览器里的看板，还把它写回自己的服务端账号。别把跨账号的备份传进来。
+ */
 export function chooseStoredBoard(primaryBoard, backupBoard) {
   const primary = normalizeBoard(primaryBoard);
   const backup = normalizeBoard(backupBoard);

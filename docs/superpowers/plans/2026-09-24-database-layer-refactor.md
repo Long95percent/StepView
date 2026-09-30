@@ -1,0 +1,573 @@
+# StepView 数据库层重构实施计划
+
+> 状态：仅实施计划，当前不直接实现功能。
+> 前置阅读：`docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`
+
+## 目标
+
+把 StepView 所有"需要保存的数据"和"会随时间过期删减的数据"收进一个边界清晰的数据库层，让上层业务只通过仓储（repository）读写数据，不再直接碰文件、Redis 或内存容器。
+
+重构之后要达到三件事：
+
+1. **只有一个数据入口。** 业务代码不关心数据存在哪、怎么存，只调用仓储方法。
+2. **边界可以被机器检查。** 不是靠约定，而是靠测试扫描源码强制执行。
+3. **过期和清理只有一个地方定义。** 不再散落在各个模块里各写一套 TTL。
+
+## 背景：现在到底有多少东西在存数据
+
+重构前先盘清家底。当前每个账号的数据分散在 **14 处**：
+
+| # | 数据 | 存放位置 | 形态 | 过期策略 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 账号、登录会话、全局设置 | `gateway.sqlite`（全局库） | SQLite | 会话 168 小时 | 表只写不清理 |
+| 2 | 画布（任务、节点、支线、贴纸） | `stepview-board.json` + 备份 + 临时文件 | 整文件 JSON | 无 | 活跃 |
+| 3 | Agent 会话、轮次、窗口、信号、提示词快照、Mem0 同步日志 | `stepview-agent.sqlite` | SQLite | 窗口 20 轮（读时算） | 活跃 |
+| 4 | 长期记忆、证据、反馈、关系、向量索引 | `agent-memory.sqlite` | SQLite | 只做软删标记 | 活跃 |
+| 5 | 用户画像 | `user-profile.sqlite` | SQLite | 无 | 活跃 |
+| 6 | 记忆类审批队列 | **内存 Map** | 内存 | 无 | **重启即丢** |
+| 7 | 画布变更提案 | `proposals/*.json`（一个提案一个文件） | 文件目录 | 7 天 / 上限 20 | 列表要全扫目录 |
+| 8 | 画布变更快照 | `history/*.json` | 文件目录 | 上限 20 | 列表要全扫目录 |
+| 9 | 知识库 | `knowledge-bases/<id>/manifest.json` | 目录 + JSON | 无 | 活跃 |
+| 10 | 账号运行时上下文 | `contexts = new Map()`（网关里两处） | 内存 | 无 | **永不释放** |
+| 11 | Agent 提示词与窗口状态 | Redis `stepview:<account>:agent` | Redis | 依赖 Redis 自身 | 活跃 |
+| 12 | 前端画布副本与设置 | localStorage | JSON | 无 | 浏览器降级模式 |
+| 13 | 浏览器模式账号，含**明文密码** | localStorage | JSON | 无 | **安全问题** |
+| 14 | Agent Journal | `stepview-agent-journal.json` | 整文件 JSON | 20 轮滑窗 | **死代码**，仅测试引用 |
+
+## 现状问题
+
+按严重程度排序。前四条是这次重构必须解决的。
+
+### 1. 审批队列只在内存里，重启就丢（数据丢失）
+
+`electron/agent/approvalManager.js` 用一个内存 `Map` 存待确认提案。用户看到"有一条记忆变更待确认"，关掉应用再打开就没了，永远确认不了。
+
+同时画布变更提案是落盘的（`proposals/*.json`），所以出现了两种审批行为不一致：画布的能活过重启，记忆的不能。这本身就是设计缺陷。
+
+### 2. 账号上下文缓存永不释放（内存泄漏）
+
+`electron/gateway/familyHttpServer.js` 和 `localGateway.js` 各有一个 `contexts = new Map()`，给每个访问过的账号建一个上下文并永久保留。家庭模式下，每个账号都拖着一个 SQLite 连接和各种缓存，人越多内存越高，永远不降。
+
+### 3. 会话表有过期时间，但从来没有清理任务（无限增长）
+
+`gateway.sqlite` 的 `sessions` 表写了 `expires_at`，但只在查询时用 `expires_at <= now` 过滤掉。过期的行永远留在表里，越积越多。
+
+### 4. 提案和快照是"一个文件一条记录"，列表要全扫目录（性能）
+
+`boardChangeStore.list()` 每次调用都要 `readdir` 整个目录，再逐个读盘解析。上线后提案一多，这个接口会拖慢整个审批面板。
+
+### 5. 知道会被删的数据没有清理，不知道会不会删的数据反而有 TTL
+
+第 3 条和第 4 条说过度保留，但反过来，真正该有 TTL 的（Agent 信号、审计事件、已删除的记忆）反而没有任何清理。保留策略是拍脑袋定的，不集中、不可调。
+
+### 6. 四套持久化机制并存，没有统一备份
+
+JSON 文件、文件目录、三个 SQLite、Redis、localStorage，各自管各自的。用户想备份数据，没有任何一个入口能拿到完整快照；`VACUUM INTO` 能保证单个 SQLite 的一致性，但现在连这个都没用。
+
+### 7. 浏览器模式把明文密码存进 localStorage（安全问题）
+
+`src/main.jsx` 注册浏览器模式账号时，把整个含 `password` 字段的对象序列化进了 localStorage。任何能在该浏览器上执行脚本的人都能直接读到密码原文，而且用户改密码也清不掉旧记录。
+
+### 8. 死代码留下的数据文件
+
+`electron/agentJournalStorage.js` 已经没有任何生产代码引用，只有它自己的测试还在用。运行时的会话数据早就搬到 `stepview-agent.sqlite` 了，但 `stepview-agent-journal.json` 这套逻辑和文件还在，容易让人以为数据存在那里。
+
+## 产品原则
+
+- **不破坏现有用户数据。** 迁移只做"复制到新库"，旧文件一律原样保留，不删不改。新库已有数据时以新库为准。
+- **升级后使用体验不变。** 个人模式和家庭模式的目录结构、接口行为保持一致。
+- **迁移必须幂等。** 中途断电、重复启动都不能产生重复数据或损坏数据。
+- **不引入新的样例/演示逻辑覆盖用户画布。** 迁移不是演示，且迁移写入必须经过与正常写入相同的校验路径。
+- **删数据只能是显式命令。** 任何自动清理都只针对明确列在保留策略表里的数据，且默认保守。
+
+## 目标架构
+
+### 目录结构
+
+```
+electron/db/
+  index.js                   createDatabase() / openAccountDatabase()
+  connection.js              DatabaseSync 封装：PRAGMA、事务助手、语句缓存
+  migrations/
+    index.js                 迁移注册表与执行器
+    0001-base.sql
+    0002-approvals.sql
+    ...
+  repositories/
+    accountRepository.js     账号、会话、全局设置
+    boardRepository.js       画布文档
+    diaryRepository.js       日记条目、关联、标签、全文索引、变更日志
+    agentSessionRepository.js Agent 会话、轮次、窗口、信号、提示词快照
+    agentMemoryRepository.js 长期记忆与证据链
+    userProfileRepository.js 用户画像
+    approvalRepository.js    统一审批队列与快照
+    knowledgeBaseRepository.js 知识库元数据
+    auditRepository.js       审计事件
+    kvRepository.js          通用键值（提示词状态、窗口状态的本地落地）
+  retention.js               全局保留策略：声明式规则 + 统一执行
+  backup.js                  VACUUM INTO 一致性备份与轮转
+  blobs.js                   附件内容寻址存储（库里存元数据，磁盘存文件）
+```
+
+### 数据库拓扑
+
+- **全局库**：`<dataDir>/gateway.sqlite`，存账号、登录会话、全局设置。保持现有文件名不变，避免破坏已部署环境。
+- **账号库**：`<accountsDir>/<accountId>/stepview.sqlite`，一个账号一个库。
+  - 并入现在的 `stepview-agent.sqlite`、`agent-memory.sqlite`、`user-profile.sqlite`、`stepview-board.json`、`proposals/`、`history/`、`knowledge-bases/`。
+- **不合并**全局库和账号库。账号数据必须物理隔离，一个账号的库损坏不能牵连其他账号。
+
+### 边界规则（可强制）
+
+这是"边界清晰"的具体含义。规则要能被测试检查，否则只是口头约定。
+
+1. `node:sqlite` 只允许出现在 `electron/db/` 目录内。
+2. `node:fs` 的写操作只允许出现在 `electron/db/`（`blobs.js`、`backup.js`）和 `electron/preflight.js`。
+3. 业务模块（`gateway/`、`agent/`、`agent/tools/`、`src/`）只能通过仓储接口访问数据，不得自己拼 SQL 或读写文件。
+4. 迁移文件只能新增，不能修改已发布的历史迁移。
+5. 删除语句只允许出现在 `electron/db/` 内；批量清理（TTL 与限额）只能由 `retention.js` 执行。
+6. 以上五条由 `tests/dbBoundary.test.js` 扫描源码强制。
+
+边界测试带一份**历史遗留豁免名单**（`DEBT`）。规则是只减不增：
+
+- 没有登记在豁免名单里的违规会让测试失败。
+- 登记过的文件如果已经不再违规，同样会让测试失败，提醒你把它从名单里删掉。
+- 每个临时豁免项必须标注计划里移除它的阶段，永久豁免项必须写明理由。
+
+这样边界不会随着时间被悄悄放宽。
+
+### 保留策略集中化
+
+新建 `electron/db/retention.js`，用一张声明式规则表描述所有会过期或需要限量的数据：
+
+```js
+export const RETENTION_RULES = [
+  // 登录会话：直接按过期时间删
+  { table: "gateway_sessions", where: "expires_at < :now" },
+  // 审批记录：已决策的保留 7 天，待确认的最多 20 条
+  { table: "approvals", where: "status != 'pending' AND created_at < :ttl", keep: { limit: 20, orderBy: "created_at DESC", filter: "status = 'pending'" }, ttlDays: 7 },
+  // 画布快照：只留最近 20 个
+  { table: "snapshots", keep: { limit: 20, orderBy: "created_at DESC" } },
+  // Agent 轮次：每个会话留最近 200 轮
+  { table: "agent_turns", keep: { limit: 200, partitionBy: "session_id", orderBy: "created_at DESC" } },
+  // Agent 信号与审计：保留 90 天
+  { table: "agent_signals", ttlDays: 90 },
+  // 日记变更日志：保留 180 天，最多 500 条
+  { table: "diary_revisions", ttlDays: 180, keep: { limit: 500, orderBy: "created_at DESC" } },
+  // 回收站里的日记：30 天后物理删除
+  { table: "diary_entries", where: "status = 'trashed' AND deleted_at < :ttl", ttlDays: 30 },
+];
+```
+
+统一由一个 `runRetention(db, { now })` 执行，触发时机：应用启动后一次、之后每 24 小时一次、以及写操作后的节流触发（最多 5 分钟一次）。每次执行结果写进 `retention_runs` 表，方便排查"我的数据为什么不见了"。
+
+调整保留期只改这张表，不碰任何业务代码。
+
+### 内存态处理原则
+
+把内存里的状态分三类，各自有明确归属：
+
+| 类别 | 判断标准 | 处理方式 |
+| --- | --- | --- |
+| 必须持久化 | 重启后丢了会让用户困惑或丢数据 | 进数据库。审批队列属于这类。 |
+| 纯派生缓存 | 丢了能立刻从数据库重建 | 可以留内存，但必须有容量上限和淘汰策略。账号上下文属于这类，改成 LRU 并加空闲淘汰，同时保证冷启动能从库重建。 |
+| 配置与注册表 | 进程生命周期内不变，且不是用户数据 | 留在内存，集中在 `createAccountContext` 里构造。工具注册表、记忆插件管理器属于这类。 |
+
+Redis 保留，但降级为"可选加速层"：家庭模式下多进程共享提示词状态时用它，连不上时自动落到本地的 `kv` 表，功能不受影响。
+
+## 数据模型
+
+### 基础表（Phase 0）
+
+```sql
+CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE kv (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE retention_runs (
+  id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  removed_json TEXT
+);
+```
+
+### 审批与快照（Phase 1）
+
+```sql
+CREATE TABLE approvals (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL,            -- memory_upsert | board_change | diary_change
+  status TEXT NOT NULL,          -- pending | approved | rejected | expired
+  summary TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  operation TEXT,
+  session_id TEXT,
+  payload_json TEXT NOT NULL,
+  diff_json TEXT,
+  base_hash TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE INDEX idx_approvals_pending ON approvals(account_id, status, created_at DESC);
+
+CREATE TABLE snapshots (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL,            -- board | diary
+  label TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_snapshots_recent ON snapshots(account_id, kind, created_at DESC);
+```
+
+### 画布文档（Phase 3）
+
+画布保持"一整块文档"的存法，不拆表。原因是审批流程依赖整块内容的指纹（`boardHash`）来判断"提案生成后画布有没有被别人改过"。一旦拆成任务表、节点表、连线表，这套指纹逻辑和 diff 逻辑全部要推倒重来，风险远大于收益。
+
+```sql
+CREATE TABLE board_documents (
+  doc_key TEXT PRIMARY KEY,      -- 目前只有 'board'
+  revision INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL,
+  backup_json TEXT,              -- 承接原 stepview-board.backup.json：主副本读不出来时回退
+  hash TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+数据库层另外维护一份 `stepview-board.json`（主文件 + 备份文件）作为**导出镜像**：画布落库之后，
+用户在文件管理器里打开数据目录依然能直接看到自己的画布，`board:reveal` 也还是展示它。
+镜像的读写集中在 `electron/db/boardExport.js`，业务代码不再碰这些文件。等 Phase 7 的显式导出
+命令落地、并确认用户不再依赖这份文件之后，镜像连同 `tests/boardStorage.test.js` 里的文件断言一起移除。
+
+### 日记（Phase 6）
+
+日记是行式数据，无界增长，要按天、按标签、按节点查询，必须建表。详见后续日记模块设计。
+
+```sql
+CREATE TABLE diary_entries (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  rev INTEGER NOT NULL DEFAULT 1,
+  occurred_at TEXT NOT NULL,
+  occurred_day TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',   -- active | archived | trashed
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX idx_diary_day ON diary_entries(account_id, occurred_day DESC);
+
+CREATE TABLE diary_links (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  diary_id TEXT NOT NULL REFERENCES diary_entries(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL,     -- node | branch | task
+  target_id TEXT NOT NULL,
+  task_id TEXT,
+  role TEXT NOT NULL DEFAULT 'context',    -- primary | context | evidence
+  created_by TEXT NOT NULL DEFAULT 'user',
+  orphaned_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (diary_id, target_type, target_id)
+);
+CREATE INDEX idx_diary_links_target ON diary_links(account_id, target_type, target_id);
+```
+
+## 实施阶段
+
+每个阶段都是可独立提交、可独立验证、可随时停下来的一次改动。前一个阶段不完成就不要开下一个。
+
+### Phase 0：数据库地基（不迁移任何数据）✅ 已完成
+
+- [x] 新建 `electron/db/connection.js`：封装 `DatabaseSync` 打开流程，统一设置 `journal_mode=WAL`、`foreign_keys=ON`、`busy_timeout`，提供 `withTransaction(fn)` 事务助手。嵌套调用复用外层事务，传入异步函数会直接报错而不是静默提前提交。
+- [x] 新建 `electron/db/migrations/index.js` 与 `0001-base.sql`：顺序迁移执行器，每步在事务内完成、失败回滚；`schema_migrations` 记录每步的 SQL 校验和，已应用的迁移被改动会直接拒绝；数据库版本高于代码支持版本时拒绝打开。
+- [x] 新建 `electron/db/index.js`：`openAccountDatabase({ dataDir })` 与 `openGlobalDatabase({ dataDir })`。
+- [x] 新建 `electron/db/retention.js`：声明式规则表 + `runRetention()`，本阶段只落地 `retention_runs` 表，规则表为空，不接任何业务数据。
+- [x] 新建 `electron/db/backup.js`：用 `VACUUM INTO` 做一致性备份，按数量轮转，替换现在的 `copyFile` 备份方式；在事务内调用会直接拒绝。
+- [x] 新建 `tests/dbBoundary.test.js`：扫描 `electron/` 与 `src/` 源码，断言上述五条边界规则，并带只减不增的豁免名单。
+- [x] 新建 `tests/dbConnection.test.js`、`tests/dbMigrations.test.js`、`tests/retention.test.js`、`tests/dbBackup.test.js`。
+- [x] 验证：`npm test` 通过，43 个文件 218 个用例全绿（原 177 + 新增 41）。
+- [x] 提交：`feat: add database layer foundation`
+
+本阶段零行为变化，纯新增，风险最低。
+
+### Phase 1：把内存态和文件目录搬进数据库 ✅ 已完成
+
+这一阶段专门修前面第 1、2、4 条问题。
+
+- [x] 新建 `electron/db/repositories/approvalRepository.js`，迁移 `0002-approvals.sql` 建 `approvals` 与 `snapshots` 表。
+- [x] 改写 `electron/agent/approvalManager.js`：内存 `Map` 换成仓储调用，`submit` / `list` / `find` / `decide` 签名不变。记忆类提案现在重启后仍在，并且 `list` / `find` / `decide` 会排除画布提案，避免同一个提案在审批列表里出现两次。
+- [x] 改写 `electron/agent/boardChangeStore.js`：提案与快照改成表，`stage` / `get` / `list` / `decide` / `remove` / `prune` / `snapshotBoard` 签名不变，新增 `listSnapshots()`。
+- [x] 改写 `electron/agent/approvalService.js` 的 `list`：一次查询取回待确认项，不再读目录逐个解析。
+- [x] 改写网关的 `contexts = new Map()`：新增 `electron/gateway/contextCache.js`，带容量上限与空闲淘汰，淘汰和关闭时都会释放账号上下文。
+- [x] 新增 `electron/db/legacyImport.js`：启动时导入旧 `proposals/*.json` 与 `history/*.json`，用 `kv` 标记保证幂等，**旧文件原样保留不删不改**，同 id 记录已存在时完全不碰。
+- [x] 顺手消除重复：`localGateway` 里那份手写的账号上下文（和 `createAccountContext` 几乎一字不差）已删除，改为复用同一个工厂；个人模式的数据目录仍是 `dataDir` 本身，升级后用户在原地看到自己的画布。
+- [x] 测试：审批跨重启仍在；LRU 淘汰与空闲清理会关闭上下文；历史导入幂等且不会把已决策的提案变回待确认；一批无索引的文件扫描断言换成表查询。
+- [x] 验证：`npm test` 通过（43 个文件 234 个用例）。
+- [x] 提交：`refactor: persist approvals in the database layer`
+
+**计划外的必要改动**：`proposalsDir()` 与 `historyDir()` 被移除。数据已经不在文件里了，继续保留这两个方法只会误导调用方。受影响的断言同步改成了表查询。
+
+### Phase 2：合并三个 SQLite ✅ 已完成
+
+- [x] 迁移 `0003-agent.sql`、`0004-memory.sql`、`0005-profile.sql`：三张旧库的表结构**逐字复制**进账号库，保证历史数据可以整表搬运。迁移文件里的 `PRAGMA` 已去掉——迁移在事务内执行，`journal_mode` 在事务里改不了，连接层已经统一设置过。
+- [x] `electron/agentSqliteStore.js` → `electron/db/repositories/agentSessionRepository.js`、`electron/agentMemorySqliteStore.js` → `agentMemoryRepository.js`、`electron/agent/userProfileStore.js` → `userProfileRepository.js`。**查询逻辑一行未改**，只把"自己打开数据库文件"换成"用注入的连接"，并去掉各自的 `close()`——连接现在归账号库统一持有。
+- [x] 一次性数据导入：用 `ATTACH DATABASE` + 按主键精确去重把旧库整表搬进账号库，旧文件改名为 `*.migrated` 保留（含 `-wal` / `-shm`）。
+- [x] 删除三个旧模块及其独立连接，`createAccountContext` 只保留一个数据库句柄。
+- [x] 测试：三库行数与内容比对；重复启动不产生重复行；缺列的旧表按列交集导入；搬不动的表**显式报错并保留旧库**、下次启动重试；`.migrated` 副本仍可打开核对。
+
+**两个必须记住的实现细节**
+
+1. **不要用 `INSERT OR IGNORE` 搬数据。** 它会把违反约束的行一起吞掉，直接变成静默丢数据。改成 `INSERT ... WHERE NOT EXISTS`（按主键去重），真正的错误老老实实抛出来：该表标记为失败、旧库保持原样、不写完成标记，下次启动继续重试。宁可报错也不能悄悄少数据。
+2. **个人模式的数据目录没有变。** 家庭模式是 `accountsDir/<accountId>`，个人模式仍然是 `dataDir` 本身，否则升级后用户会找不到自己原来的画布。
+
+**有意的偏差**：旧 Agent 会话表的表结构里没有 `account_id` 列，这次也**没有补**。账号库本身就是每账号一个文件，补一列冗余的 `account_id` 需要改动十几条语句，收益只有象征意义，不值得在这次搬迁里冒这个风险。记忆表和画像表本来就有 `account_id`，保持原样。如果以后要做跨账号共享实例，再单独加。
+
+**顺带发现（未修）**：`agentService` 里读的 `sqliteStore.accountId` 一直是 `undefined`，因为旧 `createAgentSqliteStore` 的返回值里根本没有这个字段。补上它会立刻触发记忆仓储的账号校验，可能让现有提取流程抛错，属于另一个独立问题，这里只记录不处理。
+
+### Phase 3：画布落库 ✅
+
+- [x] 迁移 `0006-board.sql` 建 `board_documents` 表。
+- [x] 新建 `boardRepository.js`，读写画布文档 + 维护 `revision` 与 `hash`。
+- [x] 改写 `electron/boardStorage.js` 为仓储的薄适配器，**对外接口完全不变**（`readBoard` / `writeBoard` / `flushWrites` / `setFsApi` / `boardPath` / `backupPath`），保证 `boardHash`、提案、审批、Agent 工具、相关测试全部零改动。仓储由 `accountContext` 注入，画布与审批、记忆共用同一个账号库连接。
+- [x] 首次导入：账号库无画布记录时读取 `stepview-board.json` 并导入，**原文件保留不删**；此后以库为准。
+- [x] 处理 `setFsApi`：文件系统注入点保留在适配器上，镜像写入仍走它，测试照旧可用。
+- [x] 处理外部依赖：`board:reveal` 改成"先导出再打开"（`boardStorage.exportBoard()`），`account:import-personal-data` 改成走仓储导入：
+      - 源目录只读，画布优先读源账号库、回退旧 JSON；旧库文件由 `electron/db/transfer.js` 复制给迁移器。
+      - 目标账号已有数据时先做 `VACUUM INTO` 一致性备份，不再靠"复制文件再复制回来"。
+      - 界面文案同步更新（`Local database ✅`、`Export board 📂`）。
+- [x] `electron/boardStorage.js`、`electron/main.js`、`electron/gateway/localGateway.js` 的边界豁免全部删除，豁免名单只减不增。
+- [x] 测试：`tests/boardStorage.test.js` 原有断言一行未改（22 个相关测试全绿），另补 4 条：库为权威副本、导出文件丢了也能读、跨实例持久化、导出内容正确。
+- [x] 验证：`npm test`（248 通过）+ `npm run build`。
+- [x] 提交：`refactor: store the board document in the database`
+
+遗留说明：JSON 导出镜像与 `tests/boardStorage.test.js` 的文件断言是刻意保留的过渡态（用户仍然能直接看到自己的画布）。
+Phase 7 提供显式导出/备份命令之后，一起移除镜像并改写这几条断言。
+
+### Phase 4：清理历史包袱 ✅
+
+- [x] 删除 `electron/agentJournalStorage.js` 及其测试（已被 `agentSqliteStore` 取代的死代码）。
+- [x] 清理 `knowledge-bases/` 的手写 JSON 目录：迁入 `knowledge_bases` 表 + `knowledgeBaseRepository`，列表不再扫目录。
+      只建了清单表，没建 `blobs`：知识库目前只有清单、没有任何正文写入方，先建一张没人用的表只会变成新的历史包袱。
+- [x] 全局库（账号、登录会话、网关设置）搬进数据库层：独立的迁移集合 `GLOBAL_MIGRATIONS` + `accountRepository`，
+      `accountStore` 变成薄适配器，老 `gateway.sqlite` 原地升级、数据不迁文件。→ 独立提交 `cc6931c`
+- [x] 接入保留策略：`db/maintenance.js` 提供"启动时执行一次 + 之后每 24 小时一次"的调度，账号库与全局库各一个实例。
+      - 账号库覆盖：Agent 信号、提示词快照、Mem0 同步日志、没写完的轮次、清理记录自身、审批与快照（Phase 1 起）。
+      - 全局库覆盖：过期登录会话。
+      - **已完成的对话轮次不设 TTL**：那是用户自己的聊天历史，只有 `status = 'pending'` 的半截轮次会被清掉。
+- [x] 每条规则执行前记录 `rowsBefore`，连同删除条数一起写进 `retention_runs`，可回答"这张表原来多少行、这次删了多少"。
+- [x] 测试：`retention.test.js` 覆盖每条规则、边界值（刚好到期的会话不删）、重跑不误删、执行前统计；
+      新增 `dbMaintenance.test.js` 覆盖启动即清理、每日定时、重复 start 不叠加、清理失败不拖垮应用。
+- [x] 验证：`npm test`（250 通过）+ `npm run build`。
+- [x] 提交：`refactor: centralize data retention and remove legacy stores`
+
+**遗留（本次刻意不做）**：软删除的记忆（`memory_items.status = 'deleted'`）还没有物理清理。
+它牵连 `memory_evidence` / `memory_embeddings` / `memory_relations` 三张子表，删错就是永久丢用户数据，
+值得单独评审一次，不塞进这次重构里顺手做。
+
+**边界豁免名单现状**：只剩两条永久豁免（`preflight.js` 环境探测、`redisManager.js` 拉起本机 Redis）。
+Phase 3、4、5 一共删掉了 8 条。
+
+### Phase 5：前端存储收口与安全修复 ✅
+
+- [x] 浏览器模式的账号存储移出 `src/main.jsx`，独立成 `src/browserAccountStore.js`（这样才能被测试）。
+- [x] 移除在 localStorage 中保存明文密码的行为：只保存 PBKDF2-SHA256 派生值（16 字节随机盐 + 12 万次迭代，恒定时间比较）。
+      - 浏览器没有 WebCrypto（非安全上下文）时不退回明文，而是不保存校验值、登录不校验：
+        本地模式本来就没有真正的安全边界，值得守住的只有"不要把用户会复用到别处的口令留在浏览器里"。
+- [x] 已存在的明文密码记录在首次加载时主动清除：趁还能读到明文就派生出等价校验值（用户仍然用原来的密码登录），
+      随后强制退出当前会话并提示重新登录一次。
+- [x] 测试：`tests/browserAccountStore.test.js` 覆盖"存储里不再出现密码字段"、旧记录迁移后旧密码仍然可用、
+      迁移可重复执行、以及没有 WebCrypto 时也不落明文。
+- [x] 验证：`npm test`（253 通过）+ `npm run build`。
+- [x] 提交：`fix: stop persisting plaintext passwords in browser mode`
+
+**偏差说明：原第三条"前端画布缓存改为带 revision 校验"没有在本阶段做，已挪到 Phase 7。**
+"只有服务端 revision 更高才覆盖"其实挡不住真正的多标签页互相覆盖——那是**写入冲突**：
+标签页 A 拿着几分钟前的画布继续保存，会把标签页 B 刚落库的内容整块盖掉。
+要真正解决，得在保存时做乐观并发校验（revision 对不上就拒绝），再配一套前端的冲突提示；
+只在读缓存时加个 revision 判断，既挡不住覆盖，又会破坏"保存失败后浏览器备份能救回来"这条恢复路径。
+所以这件事和 Phase 7 的导出/恢复一起做，不在这里塞半个方案。
+
+### Phase 6：日记板块 ✅ 已完成
+
+地基完成后才开始这一阶段。日记是行式、无界增长的数据，要按天、按标签、按节点查询，所以必须建表。
+
+**已完成：数据层（提交 `0068adf`）**
+
+- [x] 迁移 `0008-diary.sql`：`diary_entries` / `diary_links` / `diary_tags` / `diary_entry_tags` / `diary_revisions`，外加 trigram 分词器的 FTS5 索引。
+      关联表故意不写指向画布的外键：画布是一整块 JSON 文档，节点不是数据库里的行；
+      节点被删时把关联标成 `orphaned_at`，而不是把用户写的日记删掉半句。
+- [x] `src/diaryCore.js`：前端与主进程共用的纯函数——按书写者时区算"哪一天"、输入校验与规范化、检索规划、摘要。
+- [x] `electron/db/repositories/diaryRepository.js`：一次写入在同一事务里落条目、标签、关联、全文索引和变更日志；
+      `rev` 作为乐观锁，版本对不上直接报冲突而不是盖掉别人的修改；回收站、孤儿关联标记、按天/标签/节点筛选。
+- [x] 检索走混合策略：每个词都够三个字才用 FTS5 的 trigram（实测两字查询 trigram 无解），否则回退 LIKE；
+      `数据库 重构` 这种多词查询要求"每个词都出现"，而不是要求原文相邻。
+- [x] 保留策略补上日记规则：回收站 30 天物理删除、变更日志 180 天且最多 500 条、扫掉指向已删条目的索引行。
+- [x] 测试：`tests/diaryCore.test.js`（时区/校验/检索规划/摘要）+ `tests/diaryRepository.test.js`（事务、版本冲突、回收站、孤儿标记、账号隔离）。
+
+**已完成：业务层与两个通道（提交 `7ced654`）**
+
+- [x] `electron/diaryService.js`：业务层——账号隔离、输入校验、回收站、时间线（`timeline`，也是给 Agent 读的形态），
+      以及"节点备注导入"的预览与执行。这一层不写 SQL、不碰 HTTP。
+- [x] 打通 Electron IPC（`diary:*`）与家庭 HTTP（`/api/diary*`）双通道：两边共用同一个服务层，
+      所以鉴权行为一致（未登录 401），错误码也一致（输入不合法 400、找不到 404、版本冲突报冲突而不是覆盖）。
+- [x] 接入统一审批队列：新增 `diary_change`。Agent 只能通过 `diary.propose_entry` 生成提案，**不直接写库**；
+      用户批准之后才落库。提案带着"当时读到的 rev"，用户先手动改过就报冲突，不会把用户写的内容盖掉。
+      先落库、再标记"已批准"——和画布变更执行器同一个顺序，避免"提案显示已批准但什么都没写进去"。
+- [x] 节点备注导入：**保留节点原文不清空**，先预览、确认后才执行。
+      幂等靠 `kv` 里的导入标记，而不是只看 `diary_links`：导入出来的条目被用户删掉时关联会级联消失，
+      只查关联的话下次导入会把这条日记变回来。
+- [x] 测试：`tests/diaryService.test.js`（业务规则、导入幂等、账号隔离）+ `tests/diaryApproval.test.js`（审批全流程与版本冲突），
+      外加 `tests/familyHttpServer.test.js` 里的双通道用例。
+
+**这一阶段顺带修掉的 bug**
+
+- `diaryRepository.syncLinks` 删旧关联时漏了 `account_id`，`DELETE ... WHERE diary_id = ? AND account_id = ?` 永远匹配不到行，
+  于是"更新一条已经带关联的日记"会撞 `UNIQUE (diary_id, target_type, target_id)`。这个 bug 是服务层测试（更新时会带上现有 `links`）才暴露出来的，
+  仓储层原有的测试没有覆盖"更新时重复写同一条关联"，已在 `tests/diaryRepository.test.js` 补上回归用例。
+
+**复查修复（提交 `fb9beca`）**
+
+- [x] 关联改为 upsert：编辑一条日记时不再把关联的 `orphaned_at` 抹掉（服务层每次更新都会把现有 links 交回来，删了重建等于顺手复活已删节点）。
+- [x] `search` 补齐 `from` / `to` / `targetType` / `targetId`：以前只有 `list` 认这些参数，传了没报错、但也不生效。
+- [x] 版本冲突带 `statusCode = 409`：HTTP 上曾经报成 500（服务端错误），语义上它是"和当前状态冲突"。
+- [x] 已决策的提案移出待确认队列：`approvalService.list` 以前把已批准/已拒绝的记录一起返回，面板上会一直挂着一张带"保留/丢弃"按钮的卡片。
+- [x] 没有 id 的节点不参与备注导入（避免关联到一个字符串 `"undefined"`）。
+
+**遗留**
+
+- 日记的界面不在这一阶段：Phase 6 只做数据层、服务层与接口。
+
+- 验证：52 个测试文件 305 个用例全绿（本阶段从 269 涨到 305），`npm run build` 通过。
+
+### Phase 7：备份与文档（进行中）
+
+**导出与恢复（提交 `825119f`）**
+
+- [x] 统一的导出接口：`electron/db/archive.js` 把两个库各自 `VACUUM INTO` 成一致快照，附一份 manifest——格式版本、程序版本、每个库的 schema 版本、表清单与行数。FTS5 的影子表不进清单。
+- [x] 恢复流程：先校验、再替换。装不下就一个字节都不动。校验项：manifest 合法性、`PRAGMA integrity_check`、schema 版本与清单一致且不比当前程序新、必要表齐全；
+      问题一次报全而不是碰到第一个就停。替换时当前库改名成 `*.pre-restore-<时间>` 保留，旧库的 `-wal` / `-shm` 一并清掉。
+- [x] 桌面端通道：`data:export-archive` / `data:inspect-archive` / `data:restore-archive`。恢复前先关掉网关再动文件，完成后自动重启。
+- [x] 测试：`tests/dbArchive.test.js`（导出内容与行数、校验的各类失败、恢复保留旧库并清理 WAL、校验不过时不动数据、连接未关闭时拒绝恢复）。
+
+**复查修复（提交 `d616630`）**
+
+- [x] 老备份不再被判成"不完整"：必需表只要求能认出这是 StepView 的库的那几张，后来才加的表不算必需（三个月前的备份打开时补跑迁移就能用）。
+- [x] 校验改成真只读：以前 `openReadOnly` 只是"不跑迁移"，仍以读写方式打开并设置 `journal_mode=WAL`，在只读挂载上会失败，也可能动到用户的备份。现在有 `readOnly` 选项，测试断言校验前后备份文件字节不变。
+- [x] `expectedSchemaVersion` 的部分覆盖不再吃掉其余检查；支持的版本与必需表只在 `archive.js` 定义一份。
+- [x] 恢复失败时把网关重新打开，不把用户留在一个开不了画布的应用里。
+
+**文档**
+
+- [x] 更新 `docs/ARCHITECTURE_AND_EXTENSION_GUIDE.md`：新增「2.2 数据库层」——目录结构、四条边界规则、两个库的分工、保留策略表、内存态三分类、备份与恢复；
+      同步修掉正文里已经过时的存储描述（`agent-memory.sqlite` / `proposals/*.json` / `history/` / `stepview-agent.sqlite`）。
+- [x] 更新 `README.md` 的数据说明：数据目录从多个文件变为两个库，并补上备份与恢复。
+- [x] 提交：`docs: document the database layer`
+
+**尚未完成，值得单独一次改动**
+
+- [ ] 画布写入的乐观并发校验（Phase 5 挪过来的第三条）：保存时带上读到的 `revision`，对不上就拒绝并让前端提示冲突。
+      `board_documents.revision` 已经在每次保存时自增，缺的是把 revision 传到前端、以及写入时的比对与冲突提示。
+- [ ] 日记界面开工前要先处理一件事：Electron 的 IPC 只把 `message` 传给渲染层，`error.code` / `error.statusCode` 会被丢掉。
+      后端已经能区分冲突（409）和输入错误（400），但前端现在只能靠中文文案猜。做界面时让 IPC 回结构化错误（至少带上 `code`）。
+- [ ] 移除 `electron/db/boardExport.js` 的 JSON 镜像，并改写 `tests/boardStorage.test.js` 里那几条刻意冻结的文件断言。
+
+## 迁移规则
+
+所有一次性数据迁移必须满足：
+
+1. **只读旧、只写新。** 旧文件不删除、不修改、不被截断。
+2. **幂等。** 用唯一键或 `INSERT OR IGNORE` 保证重复执行不产生重复数据。
+3. **可判定完成。** 用 `schema_migrations` 表记录已完成的迁移版本，不靠"文件是否存在"猜测。
+4. **失败可重试。** 整体放在一个事务里，中途失败回滚，下次启动重试。
+5. **旧文件改名而不删除。** 合并完成后旧库改名为 `*.migrated`，保留至少一个大版本周期。
+
+## 测试清单
+
+### 数据库层
+
+- 迁移按序执行，重复执行不报错。
+- 事务失败后完整回滚，不留半截数据。
+- 迁移中途进程被杀，下次启动能继续。
+- 边界测试：`node:sqlite` 和文件写入不出现在 `electron/db/` 之外。
+
+### 保留策略
+
+- 每条规则单独用例，验证只删该删的。
+- 边界值：刚好在 TTL 上的记录不被删。
+- 重跑不误删。
+- 执行记录写入 `retention_runs`。
+
+### 迁移
+
+- 旧数据行数与新库一致。
+- 重复迁移不产生重复。
+- 旧文件在迁移后仍可读。
+- 迁移后原有业务测试全部通过，不需要修改断言。
+
+### 隔离
+
+- 账号 A 的库损坏不影响账号 B。
+- LRU 淘汰后账号上下文能重新构建。
+- 家庭模式下两个账号并发写各自库不互相阻塞。
+
+## 风险与处理
+
+### 风险：Phase 2 合库丢失记忆数据
+
+合并三个 SQLite 是最高风险动作。处理方式：先复制不删旧库，比对行数与抽样内容通过后才删除旧模块，旧库改名保留。
+
+### 风险：Phase 3 改动画布存储破坏审批流
+
+处理方式：`boardStorage` 的对外接口一行不改，只换内部实现，用现有 22 个相关测试做回归。任何需要改测试断言的改动都视为设计错误，停下来重新评估。
+
+### 风险：同步 API 阻塞事件循环
+
+`node:sqlite` 的 `DatabaseSync` 是同步 API，会阻塞 Electron 主进程和 HTTP 服务。处理方式：强制分页、禁止无索引的全表扫描、单次查询结果设上限，并把这三条写进编码规范由评审把关。
+
+### 风险：中文全文检索不准
+
+实测结论：FTS5 默认 `unicode61` 分词器会把整段中文当成一个词，两字查询完全搜不到；改用 `trigram` 分词器后，三字及以上查询正常，但两字查询仍然返回空。
+
+处理方式：检索采用混合策略——三字及以上走全文索引，少于三字回退到 `LIKE` 模糊匹配。日记正文长度和查询频率上去之后，再考虑加一张按字切分的辅助索引表。
+
+### 风险：用户看不到自己的数据了
+
+现在用户可以点开数据文件直接看。落库之后需要提供导出功能，并在设置界面保留"打开数据目录"入口，避免用户感觉数据"被藏起来了"。
+
+### 风险：迁移过程中断电
+
+处理方式：迁移整体事务化 + `schema_migrations` 记录版本 + 旧文件永不删除，保证任何时刻中断都能重来。
+
+## 完成标准
+
+- 全项目只剩 `gateway.sqlite` 与账号库 `stepview.sqlite` 两个数据库文件，不再有业务 JSON 文件和数据目录。
+- `tests/dbBoundary.test.js` 通过，边界规则可被机器检查。
+- 所有保留与清理逻辑集中在 `retention.js` 的规则表里，业务代码中不再出现 TTL 常量。
+- 审批队列重启后不丢失，且记忆类与画布类行为一致。
+- 账号上下文缓存在容量上限内，淘汰时会释放数据库连接。
+- 浏览器模式不再保存明文密码。
+- `npm test` 与 `npm run build` 通过。
+- 现有用户数据在升级后完整可见，旧文件保留在磁盘上。
+
+## 不包含
+
+- 多设备实时同步。变更日志表会预留字段，但本次不实现同步协议。
+- 数据库加密。
+- 迁移到外部数据库（PostgreSQL 等）。当前定位是本地优先应用，SQLite 足够。
+- 日记板块的界面。Phase 6 只做后端与接口，界面另行设计。

@@ -2,14 +2,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAgentSqliteStore } from "../electron/agentSqliteStore.js";
+import { openAccountDatabase } from "../electron/db/index.js";
+import { createAgentSessionRepository } from "../electron/db/repositories/agentSessionRepository.js";
 
-describe("agent sqlite store", () => {
+describe("agent session repository", () => {
   let tempDir;
   let store;
+  let database;
 
   afterEach(async () => {
-    store?.close();
+    database?.close();
+    database = undefined;
     store = undefined;
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = undefined;
@@ -17,7 +20,8 @@ describe("agent sqlite store", () => {
 
   async function makeStore() {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-agent-sqlite-"));
-    store = createAgentSqliteStore({ dataDir: tempDir });
+    database = openAccountDatabase({ dataDir: tempDir });
+    store = createAgentSessionRepository({ connection: database });
     return store;
   }
 

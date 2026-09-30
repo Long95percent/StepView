@@ -1,7 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { openGlobalDatabase } from "../db/index.js";
+import { createDatabaseMaintenance } from "../db/maintenance.js";
+import { createAccountRepository } from "../db/repositories/accountRepository.js";
+import { GLOBAL_RETENTION_RULES } from "../db/retention.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -28,49 +29,33 @@ function verifyPassword(password, encoded) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function accountFromRow(row) {
-  if (!row) return null;
-  return {
-    accountId: row.id,
-    username: row.username,
-    displayName: row.display_name,
-    role: row.role,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
+/**
+ * 账号存储。
+ *
+ * 表结构与 SQL 全部在数据库层：这里只做密码哈希、用户名规范化和会话生命周期判断。
+ * 数据库文件仍然是 dataDir/gateway.sqlite（家庭模式）——路径没变，老用户不需要迁移文件。
+ */
+export function createAccountStore({ dataDir, dbPath, sessionTtlHours = 168 } = {}) {
+  const database = openGlobalDatabase({ dataDir, dbPath });
+  const repository = createAccountRepository({ connection: database });
+  // 全局库的过期清理：启动时跑一次，之后每天一次。目前只有过期登录会话。
+  const maintenance = createDatabaseMaintenance({ connection: database, rules: GLOBAL_RETENTION_RULES });
+  maintenance.start();
 
-export function createAccountStore({ dataDir, dbPath = path.join(dataDir, "gateway.sqlite"), sessionTtlHours = 168 } = {}) {
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      username TEXT NOT NULL UNIQUE,
-      display_name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      last_used_at TEXT NOT NULL
-    );
-  `);
+  function startSession(account) {
+    const createdAt = nowIso();
+    const expiresAt = new Date(Date.now() + Number(sessionTtlHours) * 60 * 60 * 1000).toISOString();
+    const sessionId = `session-${randomUUID()}`;
+    repository.createSession({ sessionId, accountId: account.accountId, createdAt, expiresAt });
+    return { sessionId, account, expiresAt };
+  }
 
   function registerAccount({ username, password, displayName = username }) {
     const normalizedUsername = normalizeUsername(username);
     const timestamp = nowIso();
-    const role = db.prepare("SELECT COUNT(*) AS count FROM accounts").get().count === 0 ? "owner" : "member";
-    const account = {
-      id: `account-${randomUUID()}`,
+    const role = repository.countAccounts() === 0 ? "owner" : "member";
+    return repository.insertAccount({
+      accountId: `account-${randomUUID()}`,
       username: normalizedUsername,
       displayName: String(displayName || normalizedUsername).trim() || normalizedUsername,
       passwordHash: hashPassword(password),
@@ -78,61 +63,66 @@ export function createAccountStore({ dataDir, dbPath = path.join(dataDir, "gatew
       status: "active",
       createdAt: timestamp,
       updatedAt: timestamp,
-    };
-    try {
-      db.prepare(`INSERT INTO accounts (id, username, display_name, password_hash, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(account.id, account.username, account.displayName, account.passwordHash, account.role, account.status, account.createdAt, account.updatedAt);
-    } catch (error) {
-      if (String(error.message).includes("UNIQUE")) throw new Error("Username is already registered.");
-      throw error;
-    }
-    return accountFromRow(db.prepare("SELECT * FROM accounts WHERE id = ?").get(account.id));
+    });
   }
 
   function login({ username, password }) {
-    const row = db.prepare("SELECT * FROM accounts WHERE username = ?").get(normalizeUsername(username));
-    if (!row || row.status !== "active" || !verifyPassword(password, row.password_hash)) throw new Error("Invalid username or password.");
-    const createdAt = nowIso();
-    const expiresAt = new Date(Date.now() + Number(sessionTtlHours) * 60 * 60 * 1000).toISOString();
-    const sessionId = `session-${randomUUID()}`;
-    db.prepare("INSERT INTO sessions (session_id, account_id, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?)")
-      .run(sessionId, row.id, createdAt, expiresAt, createdAt);
-    return { sessionId, account: accountFromRow(row), expiresAt };
+    const account = repository.getAccountRowByUsername(normalizeUsername(username));
+    if (!account || account.status !== "active" || !verifyPassword(password, account.passwordHash)) {
+      throw new Error("Invalid username or password.");
+    }
+    const { passwordHash, ...publicAccount } = account;
+    return startSession(publicAccount);
   }
 
   function createSession(accountId) {
-    const row = db.prepare("SELECT * FROM accounts WHERE id = ? AND status = 'active'").get(accountId);
-    if (!row) throw new Error("Account not found.");
-    const createdAt = nowIso();
-    const expiresAt = new Date(Date.now() + Number(sessionTtlHours) * 60 * 60 * 1000).toISOString();
-    const sessionId = `session-${randomUUID()}`;
-    db.prepare("INSERT INTO sessions (session_id, account_id, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?)")
-      .run(sessionId, row.id, createdAt, expiresAt, createdAt);
-    return { sessionId, account: accountFromRow(row), expiresAt };
+    const account = repository.getActiveAccountById(accountId);
+    if (!account) throw new Error("Account not found.");
+    return startSession(account);
   }
 
   function getAccountForSession(sessionId) {
     if (!sessionId) return null;
-    const row = db.prepare(`SELECT a.*, s.expires_at FROM sessions s JOIN accounts a ON a.id = s.account_id WHERE s.session_id = ?`).get(sessionId);
-    if (!row || row.expires_at <= nowIso() || row.status !== "active") {
-      if (row) db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+    const found = repository.findBySessionId(sessionId);
+    if (!found || found.expiresAt <= nowIso() || found.account.status !== "active") {
+      if (found) repository.removeSession(sessionId);
       return null;
     }
-    db.prepare("UPDATE sessions SET last_used_at = ? WHERE session_id = ?").run(nowIso(), sessionId);
-    return accountFromRow(row);
+    repository.touchSession(sessionId, nowIso());
+    return found.account;
   }
 
   function logout(sessionId) {
-    if (sessionId) db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+    if (sessionId) repository.removeSession(sessionId);
   }
 
   function listAccounts() {
-    return db.prepare("SELECT * FROM accounts WHERE status = 'active' ORDER BY created_at ASC").all().map(accountFromRow);
+    return repository.listActiveAccounts();
+  }
+
+  function getSetting(key) {
+    return repository.getSetting(key);
+  }
+
+  function setSetting(key, value) {
+    return repository.setSetting(key, value, nowIso());
   }
 
   function close() {
-    db.close();
+    maintenance.stop();
+    database.close();
   }
 
-  return { dbPath, registerAccount, login, createSession, getAccountForSession, logout, listAccounts, close };
+  return {
+    dbPath: database.dbPath,
+    registerAccount,
+    login,
+    createSession,
+    getAccountForSession,
+    logout,
+    listAccounts,
+    getSetting,
+    setSetting,
+    close,
+  };
 }

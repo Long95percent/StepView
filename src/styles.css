@@ -1340,3 +1340,569 @@ button { cursor: pointer; }
   font-size: 13px;
   line-height: 1.6;
 }
+
+/* Agent workspace polish */
+:root {
+  --agent-ink: #dce6f7;
+  --agent-muted: #8492ad;
+  --agent-line: rgba(196, 211, 244, .14);
+  --agent-cyan: #8cf4ff;
+  --agent-violet: #c7a4ff;
+}
+
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(128, 247, 255, .15), 0 0 0 1px var(--agent-cyan);
+}
+
+.agentDrawerPanel {
+  width: min(470px, 94vw);
+  padding: 20px 22px 20px 20px;
+  border-left-color: rgba(196, 211, 244, .16);
+  background: linear-gradient(180deg, rgba(10, 15, 32, .98), rgba(7, 11, 25, .98));
+  box-shadow: -30px 0 90px rgba(0, 0, 0, .42), inset 1px 0 rgba(255,255,255,.035);
+}
+.agentDrawerHeader { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid rgba(196, 211, 244, .09); }
+.agentDrawerHeader strong { color: #f4f7ff; font-size: 20px; letter-spacing: -.04em; }
+.agentDrawerHeader small { color: var(--agent-muted); }
+.agentDrawerHeader .ghost { width: auto; padding: 8px 11px; color: #a9b8d3; background: rgba(255,255,255,.055); }
+.agentChatLayout { gap: 14px; height: calc(100vh - 72px); }
+.agentProviderFields {
+  padding: 12px 13px;
+  border: 1px solid rgba(128, 247, 255, .14);
+  border-radius: 17px;
+  background: linear-gradient(135deg, rgba(128, 247, 255, .085), rgba(196, 142, 255, .055));
+  box-shadow: inset 0 1px rgba(255,255,255,.06);
+}
+.agentProviderFields p { margin: 0; color: #aebbd3; font-size: 11px; line-height: 1.45; }
+.agentProviderFields .ghost { width: auto; justify-self: start; padding: 7px 10px; color: #c8d5ea; background: rgba(255,255,255,.07); }
+.agentChatLayout > label { gap: 7px; color: #aab9d4; }
+.agentChatLayout > label::before { content: "ACTIVE THREAD"; color: #71809d; font-size: 9px; letter-spacing: .14em; }
+.agentMessageList {
+  gap: 14px;
+  padding: 16px 13px;
+  border-color: var(--agent-line);
+  border-radius: 20px;
+  background: radial-gradient(circle at 80% 0%, rgba(109, 92, 255, .08), transparent 38%), rgba(3, 7, 17, .68);
+  box-shadow: inset 0 1px rgba(255,255,255,.035), inset 0 -20px 36px rgba(0,0,0,.12);
+}
+.agentEmptySession { max-width: 270px; align-self: center; justify-self: center; color: var(--agent-muted); text-align: center; }
+.agentTurn { gap: 9px; animation: agentTurnIn .22s ease both; }
+@keyframes agentTurnIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+.agentBubble {
+  max-width: 88%;
+  padding: 12px 13px;
+  border-color: var(--agent-line);
+  border-radius: 17px;
+  box-shadow: 0 8px 22px rgba(0,0,0,.12);
+}
+.agentBubble small { color: #8291ad; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.agentBubble p { color: var(--agent-ink); font-size: 13px; line-height: 1.62; }
+.agentMarkdown { color: var(--agent-ink); font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; }
+.agentMarkdown p { margin: 0 0 8px; }
+.agentMarkdown p:last-child { margin-bottom: 0; }
+.agentMarkdown pre { max-width: 100%; overflow-x: auto; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.3); }
+.agentMarkdown code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.agentMarkdown .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.agentBubble.user { border-color: rgba(128, 247, 255, .22); background: linear-gradient(145deg, rgba(34, 94, 117, .5), rgba(17, 54, 76, .42)); }
+.agentBubble.assistant { border-color: rgba(196, 142, 255, .2); background: linear-gradient(145deg, rgba(34, 29, 67, .72), rgba(20, 20, 46, .7)); }
+.agentComposer {
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--agent-line);
+  border-radius: 19px;
+  background: rgba(18, 25, 49, .72);
+  box-shadow: 0 16px 34px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.05);
+}
+.agentComposer textarea {
+  min-height: 54px;
+  max-height: 28vh;
+  min-width: 0;
+  font-size: 13px;
+  resize: none;
+  border-color: rgba(196, 211, 244, .14);
+  background: rgba(3, 7, 17, .56);
+  line-height: 1.5;
+}
+@media (max-width: 720px), (max-resolution: 1.5dppx) {
+  .agentDrawerPanel { width: min(100vw, 420px); max-width: 100vw; }
+  .agentDrawer { z-index: 20; }
+  .agentChatLayout { min-width: 0; }
+  .agentConversation { min-width: 0; }
+  .agentMessageList { min-width: 0; }
+  .agentComposer { grid-template-columns: minmax(0, 1fr) auto; }
+  .agentSendButton { min-width: 62px; padding-inline: 10px; }
+}
+.agentComposer textarea::placeholder { color: #6f7e9b; }
+.agentSendButton { min-height: 54px; min-width: 72px; padding-inline: 15px; border-radius: 15px; transition: filter .18s ease, transform .18s ease, opacity .18s ease; }
+.agentSendButton:not(:disabled):hover { filter: brightness(1.08); transform: translateY(-1px); }
+
+.agentApprovals {
+  display: grid;
+  gap: 10px;
+  max-height: 38vh;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid rgba(128, 247, 255, .2);
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(22, 45, 66, .66), rgba(16, 22, 42, .7));
+  box-shadow: inset 0 1px rgba(255,255,255,.05);
+}
+.agentApprovals > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agentApprovals > header strong { color: #dff6ff; font-size: 12px; }
+.agentApprovals > header small { color: #8fa6c6; font-size: 10px; text-align: right; }
+.agentApprovalCard {
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid rgba(196, 211, 244, .12);
+  border-radius: 13px;
+  background: rgba(6, 11, 24, .55);
+}
+.agentApprovalTitle { display: grid; gap: 4px; }
+.agentApprovalTitle strong { color: #eaf4ff; font-size: 12.5px; line-height: 1.45; }
+.agentApprovalTitle small { color: #9db0cd; font-size: 11px; line-height: 1.5; }
+.agentApprovalDiff { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.agentApprovalDiff li { position: relative; padding-left: 14px; color: #cfe0f6; font-size: 11.5px; line-height: 1.55; }
+.agentApprovalDiff li::before { content: "\203A"; position: absolute; left: 2px; color: #6fe6d0; }
+.agentApprovalNote { margin: 0; color: #7d92b3; font-size: 10.5px; }
+.agentApprovalActions { display: flex; gap: 8px; }
+.agentApprovalActions button { width: auto; padding: 7px 14px; font-size: 12px; }
+.agentApprovalActions button:disabled { opacity: .55; cursor: default; }
+
+/* ==========================================================================
+   Diary board (daily entries / node entries)
+   Shares the existing tokens: panel #10162d, border rgba(255,255,255,.12),
+   muted #9fb2d2 / #aab9d4, heading #dbe8ff. Class names are all diary-prefixed
+   so they cannot collide with the canvas .node / .modal / .agentDrawer styles.
+   ========================================================================== */
+
+.mainViewSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .05);
+}
+.mainViewSwitch button {
+  border: 0;
+  border-radius: 13px;
+  padding: 9px 10px;
+  color: #a9b8d3;
+  font-size: 12.5px;
+  font-weight: 750;
+  background: transparent;
+}
+.mainViewSwitch button.active {
+  color: #0a0f22;
+  background: linear-gradient(135deg, #8fd7ff, #a6a0ff);
+  box-shadow: 0 10px 24px rgba(61, 111, 255, .28);
+}
+.mainViewSwitch button:disabled { cursor: not-allowed; opacity: .45; }
+
+.diaryShell {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(8, 11, 24, .74), rgba(11, 15, 32, .88));
+  color-scheme: dark;
+}
+
+.diaryToolbar {
+  display: grid;
+  gap: 10px;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, .09);
+  background: rgba(9, 12, 28, .72);
+  backdrop-filter: blur(18px);
+}
+.diaryToolbarRow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.diaryToolbarRow h1 { margin: 0 8px 0 0; color: #eaf2ff; font-size: 20px; letter-spacing: -.03em; }
+.diarySegmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .045);
+}
+.diarySegmented button {
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 12px;
+  color: #a9b8d3;
+  font-size: 12px;
+  font-weight: 750;
+  background: transparent;
+}
+.diarySegmented button.active {
+  color: #eef4ff;
+  background: rgba(109, 92, 255, .36);
+  box-shadow: inset 0 0 0 1px rgba(160, 180, 255, .28);
+}
+.diaryToolbarRow > .primary { margin-left: auto; padding: 10px 16px; }
+.diaryToolbarRow > .ghost { width: auto; padding: 10px 14px; }
+.diarySearch { display: flex; flex: 1 1 260px; gap: 6px; min-width: 220px; }
+.diarySearch input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  color: #fff;
+  background: rgba(255, 255, 255, .06);
+}
+.diarySearch button { width: auto; padding: 10px 14px; }
+.diaryToolbar select {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  color: #eef4ff;
+  background: linear-gradient(145deg, rgba(14, 19, 40, .98), rgba(8, 12, 29, .96));
+  color-scheme: dark;
+}
+.diaryToolbar select option { color: #eef4ff; background: #0b1023; }
+
+.diaryBody {
+  overflow-y: auto;
+  padding: 20px 22px 64px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 247, 255, .28) rgba(255, 255, 255, .03);
+}
+.diaryBody::-webkit-scrollbar { width: 9px; }
+.diaryBody::-webkit-scrollbar-track { background: transparent; }
+.diaryBody::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(128, 247, 255, .26); }
+.diaryHint { margin: 0 0 12px; color: #9fb2d2; font-size: 13px; }
+.diaryEmpty { display: grid; gap: 14px; justify-items: start; padding: 44px 4px; color: #aab9d4; }
+.diaryEmpty p { margin: 0; font-size: 14px; }
+
+.diaryDayGroup { margin-bottom: 24px; }
+.diaryDayGroup h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  color: #dbe8ff;
+  font-size: 13.5px;
+  letter-spacing: .02em;
+}
+.diaryDayCount {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #9fb2d2;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, .07);
+}
+
+.diaryEntry {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, .045);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .18);
+}
+.diaryEntry header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.diaryEntry header time { color: #93a3be; font-size: 12px; font-variant-numeric: tabular-nums; }
+.diaryEntry header strong { color: #f0f5ff; font-size: 15px; letter-spacing: -.02em; }
+.diaryEntry > p { margin: 0; color: #c6d4ea; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+.diaryEntry footer { display: flex; flex-wrap: wrap; gap: 6px; }
+.diaryKindBadge {
+  padding: 2px 8px;
+  border: 1px solid rgba(160, 180, 255, .24);
+  border-radius: 999px;
+  color: #bcc9ff;
+  font-size: 10.5px;
+  font-weight: 800;
+  background: rgba(109, 92, 255, .18);
+}
+.diaryTag { padding: 2px 9px; border-radius: 999px; color: #a9f0e2; font-size: 11px; background: rgba(53, 230, 168, .13); }
+.diaryNodeTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  padding: 3px 10px;
+  border: 1px solid rgba(128, 211, 255, .24);
+  border-radius: 999px;
+  color: #a8ddff;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(0, 170, 255, .12);
+}
+button.diaryNodeTag { cursor: pointer; }
+button.diaryNodeTag:hover { color: #e6f6ff; background: rgba(0, 170, 255, .22); }
+.diaryEntryActions { display: flex; gap: 8px; }
+.diaryEntryActions button { width: auto; margin-top: 0; padding: 7px 13px; font-size: 12px; }
+
+.diaryTimeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.diaryTimeline li {
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-left: 3px solid rgba(128, 211, 255, .5);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .04);
+}
+.diaryTimeline time { color: #9fb2d2; font-size: 11.5px; }
+.diaryTimeline strong { color: #eaf2ff; font-size: 14px; }
+.diaryTimeline p { margin: 0; color: #b9c8df; font-size: 12.5px; line-height: 1.6; }
+
+.diaryEditor { width: min(620px, calc(100vw - 40px)); max-height: min(86vh, 780px); overflow-y: auto; }
+.diaryNodePicker { margin: 0; padding: 12px; border: 1px solid rgba(255, 255, 255, .12); border-radius: 16px; }
+.diaryNodePicker legend { padding: 0 6px; color: #aab9d4; font-size: 12px; font-weight: 700; }
+.diaryNodeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+.diaryEditor .diaryNodeOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  color: #cfdcf1;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, .045);
+}
+.diaryEditor .diaryNodeOption input { width: auto; margin: 0; }
+.diaryEditor .diaryNodeOption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diaryConflict {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 168, 120, .32);
+  border-radius: 16px;
+  color: #ffd9b8;
+  background: rgba(255, 140, 60, .12);
+}
+.diaryConflict p { margin: 0; font-size: 12.5px; line-height: 1.6; }
+.diaryConflict .ghost { width: auto; justify-self: start; padding: 8px 13px; color: #ffe9d6; }
+.diaryError { margin: 0; color: #ff9eaa; font-size: 12.5px; }
+
+/* --- Node diary block (inside an expanded node card) ---------------------- */
+/* The node card is 210px wide, so everything here is deliberately compact:
+   one line for the time + title, two lines of body, tiny action buttons. */
+
+.nodeDiary {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  cursor: auto;
+  user-select: text;
+}
+.nodeDiaryHead { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
+.nodeDiaryHead span { color: #dbe8ff; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.nodeDiaryHead small { color: #93a3be; font-size: 10px; }
+.nodeDiaryHeadDays { margin-top: 12px; }
+.nodeDiaryEmpty { margin: 0 0 8px; color: #9fb2d2; font-size: 10.5px; line-height: 1.5; }
+.nodeDiaryEntry {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 7px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .05);
+}
+.nodeDiaryEntry header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.nodeDiaryEntry time { color: #93a3be; font-size: 10px; font-variant-numeric: tabular-nums; }
+.nodeDiaryEntry strong { color: #eaf2ff; font-size: 11.5px; line-height: 1.3; }
+.nodeDiaryEntry p {
+  margin: 0;
+  color: #c6d4ea;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nodeDiaryActions { display: flex; gap: 6px; }
+.nodeDiaryActions button {
+  width: auto;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-radius: 9px;
+  color: #c2d0e6;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, .06);
+}
+.nodeDiaryActions button:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+.nodeDiaryAdd {
+  width: 100%;
+  margin-top: 2px;
+  padding: 7px 9px;
+  border: 1px dashed rgba(160, 180, 255, .34);
+  border-radius: 11px;
+  color: #bcc9ff;
+  font-size: 11px;
+  font-weight: 750;
+  background: rgba(109, 92, 255, .1);
+}
+.nodeDiaryAdd:hover { color: #fff; background: rgba(109, 92, 255, .2); }
+.nodeDiaryImport {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px dashed rgba(255, 219, 92, .34);
+  border-radius: 11px;
+  color: #ffe8a8;
+  font-size: 11px;
+  font-weight: 750;
+  background: rgba(255, 219, 92, .09);
+}
+.nodeDiaryImport:hover { color: #fff; background: rgba(255, 219, 92, .18); }
+/* Read-only history of canvas note text. Collapsed by default: the canvas card
+   already shows the note, this is only here so the original stays findable after import. */
+.nodeDiarySource { margin-top: 6px; }
+.nodeDiarySource summary {
+  color: #9fb2d2;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.nodeDiarySource pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 11px;
+  color: #b9c7de;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, .04);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.nodeDiaryDays { display: flex; flex-wrap: wrap; gap: 5px; }
+.nodeDiaryDay {
+  position: relative;
+  width: auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(128, 211, 255, .26);
+  border-radius: 10px;
+  color: #a8ddff;
+  font-size: 10.5px;
+  font-weight: 750;
+  background: rgba(0, 170, 255, .12);
+}
+.nodeDiaryDay:hover { color: #e6f6ff; background: rgba(0, 170, 255, .24); }
+.nodeDiaryDayCount {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #0a1020;
+  font-size: 9.5px;
+  background: #8fd7ff;
+}
+
+/* --- Day popover: shell level, screen coordinates (N2) -------------------- */
+/* z-index 8 sits above the sidebar (4) and below the modals (10), per N4. */
+
+.diaryBackdrop {
+  position: fixed;
+  z-index: 8;
+  inset: 0;
+  background: rgba(3, 6, 15, .34);
+  backdrop-filter: blur(3px);
+}
+.diaryPopover {
+  position: fixed;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 24px;
+  background: #10162d;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+  /* No transform / backdrop-filter here on purpose: the editor modal rendered inside is
+     position: fixed, and either property would make this element its containing block. */
+}
+.diaryPopoverHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, .09);
+}
+.diaryPopoverHead div { display: grid; gap: 3px; min-width: 0; }
+.diaryPopoverHead strong { color: #eaf2ff; font-size: 15px; letter-spacing: -.02em; }
+.diaryPopoverHead small { color: #9fb2d2; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diaryPopoverHead .ghost { width: auto; padding: 5px 10px; font-size: 12px; }
+.diaryPopoverBody { overflow-y: auto; padding: 12px 16px; }
+.diaryPopoverEntry {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .045);
+}
+.diaryPopoverEntry header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; }
+.diaryPopoverEntry time { color: #93a3be; font-size: 11px; font-variant-numeric: tabular-nums; }
+.diaryPopoverEntry strong { color: #f0f5ff; font-size: 13.5px; }
+.diaryPopoverEntry > p { margin: 0; color: #c6d4ea; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+.diaryPopoverFoot { padding: 10px 16px 14px; border-top: 1px solid rgba(255, 255, 255, .09); }
+.diaryPopoverFoot .ghost { width: 100%; padding: 9px 12px; font-size: 12px; }
+
+.diaryFocusDay {
+  width: auto;
+  padding: 8px 12px;
+  border: 1px solid rgba(128, 211, 255, .3);
+  border-radius: 999px;
+  color: #a8ddff;
+  font-size: 12px;
+  font-weight: 750;
+  background: rgba(0, 170, 255, .14);
+}
+.diaryFocusDay:hover { color: #e6f6ff; background: rgba(0, 170, 255, .24); }
+
+/* --- Node note import: preview modal (Phase 5) --------------------------- */
+/* These panels render through a portal onto document.body: the node card sits inside a
+   transformed canvas world, and transform / backdrop-filter would make it the containing
+   block for position: fixed descendants, squeezing a full-screen backdrop down to the
+   node card. Nothing here may reintroduce transform or backdrop-filter either. */
+
+.diaryImportModal { width: min(560px, calc(100vw - 48px)); }
+.diaryImportModal h2 { margin: 0 0 8px; }
+.diaryImportModal > p { margin: 0 0 10px; color: #b9c7de; font-size: 13px; line-height: 1.6; }
+.diaryImportFacts { margin: 0 0 12px; padding-left: 18px; color: #9fb2d2; font-size: 12px; line-height: 1.7; }
+.diaryImportFacts b { color: #dbe8ff; }
+.diaryImportPreview {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  color: #c6d4ea;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, .045);
+  max-height: 280px;
+  overflow-y: auto;
+}

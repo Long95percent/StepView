@@ -37,12 +37,21 @@ import {
 } from "./progressCore";
 import { buildAgentMemory } from "./agentMemory";
 import { getActiveAgentScopeOptions, getAgentSessionTurns, sanitizeAgentScopeId } from "./agentSessionUi";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { createBrowserGatewayApi } from "./browserGatewayApi";
+import { getBrowserAccountStore } from "./browserAccountStore";
+import { clearLegacyUnscoped, readAccountScoped, writeAccountScoped } from "./accountScopedStorage";
+import { createDiaryApi } from "./diary/diaryApi";
+import { DayDiaryPopover } from "./diary/dayDiaryPopover";
+import { DiariesView } from "./diary/diariesView";
+import { collectNodeOptions } from "./diary/diaryViewCore";
+import { NodeDiarySection } from "./diary/nodeDiarySection";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
-const BROWSER_ACCOUNTS_KEY = "stepview-browser-accounts-v1";
-const BROWSER_CURRENT_ACCOUNT_KEY = "stepview-browser-current-account-v1";
 const SETTINGS_KEY = "stepview-settings-v1";
 const emoji = (codePoint) => String.fromCodePoint(codePoint);
 const INITIAL_BOARD = { tasks: [], stickers: [], links: [], achievements: [] };
@@ -53,35 +62,19 @@ const EMPTY_AGENT_JOURNAL = {
 const DEFAULT_SETTINGS = { agentModel: "gpt-5.1", openaiApiKey: "", openaiBaseUrl: "https://api.openai.com/v1" };
 const desktopApi = window.stepview || createBrowserGatewayApi();
 
-function createBrowserAccountId() {
-  if (typeof globalThis.crypto?.randomUUID === "function") return `browser-${globalThis.crypto.randomUUID()}`;
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    const bytes = new Uint8Array(16);
-    globalThis.crypto.getRandomValues(bytes);
-    return `browser-${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
+/**
+ * 日记的唯一数据入口。
+ *
+ * 桌面模式走 preload 的 diary 命名空间，家庭模式走 browserGatewayApi 里的同名命名空间。
+ * 万一某个运行模式没提供，也只是少一个"日记"入口，不该让整个应用白屏，所以这里兜住异常。
+ */
+function createAppDiaryApi() {
+  try {
+    return createDiaryApi(desktopApi);
+  } catch {
+    return null;
   }
-  return `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
-
-const browserAccountApi = {
-  async registerAccount({ username, password, displayName }) {
-    const accounts = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]");
-    const normalizedUsername = username.trim().toLowerCase();
-    if (accounts.some((account) => account.username === normalizedUsername)) throw new Error("Username is already registered.");
-    const account = { accountId: createBrowserAccountId(), username: normalizedUsername, displayName: displayName?.trim() || normalizedUsername };
-    localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify([...accounts, { ...account, password }]));
-    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(account));
-    return account;
-  },
-  async login({ username, password }) {
-    const normalizedUsername = username.trim().toLowerCase();
-    const account = JSON.parse(localStorage.getItem(BROWSER_ACCOUNTS_KEY) || "[]").find((candidate) => candidate.username === normalizedUsername && candidate.password === password);
-    if (!account) throw new Error("Invalid username or password.");
-    const safeAccount = { accountId: account.accountId, username: account.username, displayName: account.displayName };
-    localStorage.setItem(BROWSER_CURRENT_ACCOUNT_KEY, JSON.stringify(safeAccount));
-    return safeAccount;
-  },
-};
 
 function GatewayLogin({ api, onAuthenticated }) {
   const [registering, setRegistering] = React.useState(false);
@@ -121,13 +114,25 @@ function GatewayLogin({ api, onAuthenticated }) {
     </main>
   );
 }
-function loadBrowserBoard() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? withFreshAgentMemory(normalizeBoard(JSON.parse(saved))) : INITIAL_BOARD;
-  } catch {
-    return INITIAL_BOARD;
-  }
+/**
+ * 当前登录账号的 id。
+ *
+ * 空串表示"还没有任何账号"——这时任何本地备份都读不到（见 accountScopedStorage）。
+ * 这不是洁癖：localStorage 是整个浏览器共用的，没有归属就不敢碰。
+ */
+function currentAccountId(gatewayInfo) {
+  return String(gatewayInfo?.account?.accountId ?? "").trim();
+}
+
+/** 这个账号自己的看板备份。没有归属、或者不是这个账号的，一律当作没有备份。 */
+function loadBrowserBoard(accountId) {
+  const saved = readAccountScoped(localStorage, STORAGE_KEY, accountId);
+  if (!saved?.value) return INITIAL_BOARD;
+  return withFreshAgentMemory(normalizeBoard(saved.value));
+}
+
+function saveBoardBackup(accountId, snapshot) {
+  return writeAccountScoped(localStorage, STORAGE_KEY, accountId, snapshot);
 }
 
 function withFreshAgentMemory(board) {
@@ -135,13 +140,14 @@ function withFreshAgentMemory(board) {
   return { ...normalized, agentMemory: buildAgentMemory(normalized) };
 }
 
-function loadSettings() {
-  try {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
+/** 这个账号自己的设置备份。设置里带着 OpenAI key，串号比看板串号更严重。 */
+function loadAccountSettings(accountId) {
+  const saved = readAccountScoped(localStorage, SETTINGS_KEY, accountId);
+  return saved?.value ? { ...DEFAULT_SETTINGS, ...saved.value } : DEFAULT_SETTINGS;
+}
+
+function saveAccountSettingsBackup(accountId, next) {
+  return writeAccountScoped(localStorage, SETTINGS_KEY, accountId, next);
 }
 
 function screenToWorld(event, viewport, canvasElement) {
@@ -153,7 +159,7 @@ function screenToWorld(event, viewport, canvasElement) {
 }
 
 function isCanvasPanTarget(target) {
-  return target instanceof Element && !target.closest(".node, .sticker, .contextMenu, .modalBackdrop, .galleryBackdrop, .linkHandle, .crossTaskEdgeHit");
+  return target instanceof Element && !target.closest(".node, .sticker, .contextMenu, .modalBackdrop, .galleryBackdrop, .linkHandle, .crossTaskEdgeHit, .diaryPopover, .diaryBackdrop");
 }
 
 function App() {
@@ -169,6 +175,15 @@ function App() {
   const [linkDrag, setLinkDrag] = React.useState(null);
   const [branchLinkDrag, setBranchLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
+  // 右侧主列显示什么。日记是独立板块，所以在这一列里切换，而不是再开一个窗口。
+  const [mainView, setMainView] = React.useState("canvas");
+  // 从节点上的日期按钮点出来的当日弹层：{ nodeId, day, anchor }。
+  // 它渲染在 shell 层、用屏幕坐标（N2）——节点在带 transform 的画布世界里，塞进节点卡片会跟着缩放。
+  const [dayPopover, setDayPopover] = React.useState(null);
+  // 从弹层"在日记板块中打开"时，让日记板块只看那一天。
+  const [diaryFocusDay, setDiaryFocusDay] = React.useState(null);
+  // 节点里的日记区和弹层都要在对方改动数据后刷新，靠这个计数器互相通知。
+  const [diaryRevision, setDiaryRevision] = React.useState(0);
   const [achievementPopup, setAchievementPopup] = React.useState(null);
   const [tutorialOpen, setTutorialOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -179,13 +194,17 @@ function App() {
   const [loveRain, setLoveRain] = React.useState([]);
   const [emojiRain, setEmojiRain] = React.useState([]);
   const [quickGoal, setQuickGoal] = React.useState("Ship StepView v1");
-  const [settings, setSettings] = React.useState(loadSettings);
-  const [settingsDraft, setSettingsDraft] = React.useState(loadSettings);
+  // 设置里带着 OpenAI key，所以初值只能是默认值：账号还没确定之前，
+  // 读任何"当前浏览器里的设置"都可能读到上一个账号的 key。
+  const [settings, setSettings] = React.useState(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = React.useState(DEFAULT_SETTINGS);
   const [agentDrawerOpen, setAgentDrawerOpen] = React.useState(false);
   const [agentScopeId, setAgentScopeId] = React.useState("global");
   const [agentQuestion, setAgentQuestion] = React.useState("");
   const [agentJournal, setAgentJournal] = React.useState(EMPTY_AGENT_JOURNAL);
   const [agentLoading, setAgentLoading] = React.useState(false);
+  const [agentApprovals, setAgentApprovals] = React.useState([]);
+  const [approvalBusyId, setApprovalBusyId] = React.useState(null);
   const [streamingTurn, setStreamingTurn] = React.useState(null);
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
@@ -194,27 +213,82 @@ function App() {
   const canvasRef = React.useRef(null);
   const agentMessageListRef = React.useRef(null);
 
+  const diaryApi = React.useMemo(() => createAppDiaryApi(), []);
+  // 喂给编辑器里的节点多选，以及日记列表里的"关联到哪个节点"小标签。
+  const diaryNodeOptions = React.useMemo(() => collectNodeOptions(board), [board]);
+  const bumpDiary = React.useCallback(() => setDiaryRevision((current) => current + 1), []);
+
   React.useEffect(() => {
-    if (!desktopApi?.getGatewayInfo) return;
-    desktopApi.getGatewayInfo().then(setGatewayInfo).catch((error) => {
-      console.error("Failed to load gateway info", error);
-      setGatewayInfo({ mode: "browser", account: JSON.parse(localStorage.getItem(BROWSER_CURRENT_ACCOUNT_KEY) || "null") });
-    });
+    let cancelled = false;
+    async function boot() {
+      // 浏览器模式的历史明文密码先擦干净；擦到过就强制重新登录一次。
+      try {
+        const migration = await getBrowserAccountStore().migratePlaintextPasswords();
+        if (migration.forcedLogout && !cancelled) setToast("浏览器模式不再保存明文密码，请用原来的密码重新登录一次。");
+      } catch (error) {
+        console.error("Failed to clear stored browser passwords", error);
+      }
+      if (cancelled || !desktopApi?.getGatewayInfo) return;
+      desktopApi.getGatewayInfo().then((info) => {
+        if (!cancelled) setGatewayInfo(info);
+      }).catch((error) => {
+        console.error("Failed to load gateway info", error);
+        if (!cancelled) setGatewayInfo({ mode: "browser", account: getBrowserAccountStore().currentAccount() });
+      });
+    }
+    boot();
+    return () => { cancelled = true; };
   }, []);
+
+  React.useEffect(() => {
+    const accountId = currentAccountId(gatewayInfo);
+    if (!accountId) return;
+    if (gatewayInfo.mode === "family") {
+      if (!desktopApi?.loadSettings) return;
+      desktopApi.loadSettings().then((saved) => {
+        const next = { ...DEFAULT_SETTINGS, ...saved };
+        setSettings(next);
+        setSettingsDraft(next);
+        saveAccountSettingsBackup(accountId, next);
+      }).catch((error) => console.error("Failed to load shared settings", error));
+      return;
+    }
+    // 非家庭模式没有服务端设置，这个账号自己的本地备份就是它的设置。
+    const next = loadAccountSettings(accountId);
+    setSettings(next);
+    setSettingsDraft(next);
+  }, [gatewayInfo]);
+
+  /**
+   * 清掉旧版本留下的、没有账号归属的备份。
+   *
+   * 那些键里没有任何归属信息，无法判断是谁写的；留着等于在浏览器里放一份
+   * 谁登录都可能被读到的数据（这次串号事故就是它）。家庭模式下服务端的库才是事实源，
+   * 所以删掉它不会丢任何东西。
+   *
+   * 只在家庭模式删：浏览器模式（根本没有服务端的那种）没有别的副本，
+   * 删了就是真的丢数据，所以那边只做到"永远不读"。
+   */
+  React.useEffect(() => {
+    if (gatewayInfo?.mode !== "family" || !currentAccountId(gatewayInfo)) return;
+    clearLegacyUnscoped(localStorage, STORAGE_KEY);
+    clearLegacyUnscoped(localStorage, SETTINGS_KEY);
+  }, [gatewayInfo]);
 
   React.useEffect(() => {
     if (gatewayInfo?.mode !== "family" || !gatewayInfo.account || !desktopApi?.listAccounts) return;
     desktopApi.listAccounts().then(setAccounts).catch((error) => console.error("Failed to load accounts", error));
   }, [gatewayInfo]);
 
-  const saveSettings = (event) => {
+  const saveSettings = async (event) => {
     event.preventDefault();
     const nextSettings = {
       agentModel: settingsDraft.agentModel.trim() || DEFAULT_SETTINGS.agentModel,
       openaiApiKey: settingsDraft.openaiApiKey.trim(),
       openaiBaseUrl: settingsDraft.openaiBaseUrl.trim() || DEFAULT_SETTINGS.openaiBaseUrl,
     };
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+    saveAccountSettingsBackup(currentAccountId(gatewayInfo), nextSettings);
+    if (gatewayInfo?.mode === "family" && desktopApi?.saveSettings) await desktopApi.saveSettings(nextSettings);
     setSettings(nextSettings);
     setSettingsOpen(false);
     setToast("设置已保存。");
@@ -227,50 +301,47 @@ function App() {
 
   const persistBoard = React.useCallback((nextBoard) => {
     const snapshot = { ...normalizeBoard(nextBoard), updatedAt: new Date().toISOString() };
+    // 备份必须记在当前账号名下：没有账号（还没登录）就不写，免得匿名状态下的看板
+    // 变成下一个登录者的"自己的备份"。
+    const accountId = currentAccountId(gatewayInfo);
     if (gatewayInfo?.mode !== "browser") {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-      } catch (backupError) {
-        console.error("Failed to save browser backup", backupError);
-      }
+      saveBoardBackup(accountId, snapshot);
       desktopApi.saveBoard(snapshot).catch((error) => {
         console.error("Failed to save board", error);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+        if (saveBoardBackup(accountId, snapshot)) {
           setToast("Local file save failed; browser backup saved.");
-        } catch (backupError) {
-          console.error("Failed to save browser backup", backupError);
+        } else {
           setToast("Save failed. Please avoid closing StepView.");
         }
       });
       return;
     }
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-    } catch (error) {
-      console.error("Failed to save board", error);
+    if (!saveBoardBackup(accountId, snapshot)) {
       setToast("Save failed. Please avoid closing StepView.");
     }
-  }, [gatewayInfo?.mode]);
+  }, [gatewayInfo]);
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         if (!gatewayInfo || !gatewayInfo.account) return;
+        const accountId = currentAccountId(gatewayInfo);
         if (gatewayInfo.mode !== "browser") {
-          const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard()));
+          // 只把这个账号自己的备份拿来比对：别人的备份根本读不到，所以
+          // "服务端是空的就回落到本地"这条规则不会再变成一条串号通路。
+          const saved = withFreshAgentMemory(chooseStoredBoard(await desktopApi.loadBoard(), loadBrowserBoard(accountId)));
           if (!cancelled) {
             setBoard(saved);
             persistBoard(saved);
           }
           return;
         }
-        if (!cancelled) setBoard(loadBrowserBoard());
+        if (!cancelled) setBoard(loadBrowserBoard(accountId));
       } catch (error) {
         console.error("Failed to load board", error);
         if (!cancelled) {
-          setBoard(loadBrowserBoard());
+          setBoard(loadBrowserBoard(currentAccountId(gatewayInfo)));
           setToast("Load failed, using browser backup.");
         }
       } finally {
@@ -483,6 +554,35 @@ function App() {
     window.setTimeout(() => setToast(null), 1700);
   };
 
+  /**
+   * 从日记里点"关联节点"小标签：切回画布并选中它。
+   *
+   * 画布只渲染活跃任务线里的节点，所以关联到已完成任务线的节点点不出来——
+   * 那种情况要明说，不能让用户以为点了没反应。
+   */
+  const openNodeFromDiary = (nodeId) => {
+    const id = String(nodeId);
+    setMainView("canvas");
+    if (!activeTasks.some((task) => task.nodes.some((node) => node.id === id))) {
+      showToast("这个节点在已完成的任务线里，先还原那条任务线才能看到它。");
+      return;
+    }
+    setSelectedNodeId(id);
+  };
+
+  const refreshAgentApprovals = React.useCallback(async () => {
+    if (!desktopApi?.listAgentApprovals) return;
+    try {
+      setAgentApprovals((await desktopApi.listAgentApprovals()) || []);
+    } catch (error) {
+      console.error("Failed to load pending agent changes", error);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (agentDrawerOpen) refreshAgentApprovals();
+  }, [agentDrawerOpen, refreshAgentApprovals]);
+
   const askAgent = async (event) => {
     event.preventDefault();
     const submittedQuestion = agentQuestion.trim();
@@ -553,6 +653,26 @@ function App() {
     } finally {
       setStreamingTurn(null);
       setAgentLoading(false);
+      refreshAgentApprovals();
+    }
+  };
+
+  const decideAgentApproval = async (approval, decision) => {
+    if (!desktopApi?.decideAgentApproval || approvalBusyId) return;
+    setApprovalBusyId(approval.approvalId);
+    try {
+      await desktopApi.decideAgentApproval({ approvalId: approval.approvalId, decision });
+      if (decision === "approved" && approval.type === "board_change") {
+        const saved = withFreshAgentMemory(await desktopApi.loadBoard());
+        setBoard(saved);
+      }
+      showToast(decision === "approved" ? `已保留：${approval.summary}` : `已丢弃：${approval.summary}`);
+    } catch (error) {
+      console.error("Failed to decide agent change", error);
+      showToast(`操作失败：${error.message}`);
+    } finally {
+      setApprovalBusyId(null);
+      await refreshAgentApprovals();
     }
   };
 
@@ -564,24 +684,34 @@ function App() {
   React.useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
+        // 弹层开着时，Esc 先关它：这是用户当下唯一在看的东西。
+        if (dayPopover) {
+          setDayPopover(null);
+          return;
+        }
         cancelLinkDrag();
         setBranchLinkDrag(null);
         setSelectedLinkId(null);
         setSelectedBranchId(null);
         setBranchDraft(null);
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedLinkId) {
+      // 在输入框里按 Backspace / Delete 是在改文字，不是在删节点或连线。
+      const target = event.target;
+      const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+      // 画布没在屏幕上、或者弹层开着的时候，这两个键都不该去删画布上的东西（N3）。
+      const deleting = (event.key === "Delete" || event.key === "Backspace") && !typing && !dayPopover && mainView === "canvas";
+      if (deleting && selectedLinkId) {
         updateBoard((current) => deleteCrossTaskLink(current, selectedLinkId));
         setSelectedLinkId(null);
         showToast("Link deleted.");
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedBranchId) {
+      if (deleting && selectedBranchId) {
         deleteSelectedBranch();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [linkDrag, selectedLinkId, selectedBranchId, updateBoard]);
+  }, [linkDrag, selectedLinkId, selectedBranchId, updateBoard, dayPopover, mainView]);
 
   React.useEffect(() => {
     if (!linkDrag && !branchLinkDrag) return undefined;
@@ -685,7 +815,7 @@ function App() {
 
   const logoutAccount = async () => {
     if (gatewayInfo.mode === "browser") {
-      localStorage.removeItem(BROWSER_CURRENT_ACCOUNT_KEY);
+      getBrowserAccountStore().logout();
     } else {
       await desktopApi.logout();
     }
@@ -713,7 +843,7 @@ function App() {
     desktopApi && !gatewayInfo
       ? <main className="gatewayLogin"><p>Loading...</p></main>
       : !gatewayInfo.account
-        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? browserAccountApi : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
+        ? <GatewayLogin api={gatewayInfo.mode === "browser" ? getBrowserAccountStore() : desktopApi} onAuthenticated={(account) => setGatewayInfo((current) => ({ ...current, account }))} />
         : (
     <main className="shell">
       <aside className="sidebar">
@@ -722,6 +852,21 @@ function App() {
           <div>
             <strong>StepView ✨</strong>
           </div>
+        </div>
+
+        {/* 主列显示什么。用 div 不用 section：`.sidebar > section:first-of-type` 会吃到 margin-top: auto。 */}
+        <div className="mainViewSwitch" role="group" aria-label="主视图">
+          <button type="button" className={mainView === "canvas" ? "active" : ""} onClick={() => setMainView("canvas")}>🎨 画布</button>
+          <button
+            type="button"
+            className={mainView === "diary" ? "active" : ""}
+            // 从侧栏进来就是"打开日记板块"，不带上次从弹层带过来的那一天。
+            onClick={() => { setDiaryFocusDay(null); setDayPopover(null); setMainView("diary"); }}
+            disabled={!diaryApi}
+            title={diaryApi ? undefined : "当前运行模式没有提供日记通道"}
+          >
+            📔 日记
+          </button>
         </div>
 
         {gatewayInfo?.mode === "family" && gatewayInfo.account && (
@@ -830,12 +975,22 @@ function App() {
 
         <section>
           <h2>💾 Save</h2>
-          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local file ✅"}</p>
-          {desktopApi.revealDataFile && <button className="ghost" onClick={() => desktopApi.revealDataFile()}>Folder 📂</button>}
+          <p className="storagePill">{gatewayInfo?.mode === "browser" ? "Browser local ✅" : gatewayInfo?.mode === "family" ? "Family Gateway ✅" : "Local database ✅"}</p>
+          {desktopApi.revealDataFile && <button className="ghost" title="Export the current board as a JSON file and show it in the folder" onClick={() => desktopApi.revealDataFile()}>Export board 📂</button>}
           <button className="danger wide" onClick={clearBoard}>Clear 🧹</button>
         </section>
       </aside>
 
+      {mainView === "diary" && diaryApi ? (
+        <DiariesView
+          api={diaryApi}
+          nodeOptions={diaryNodeOptions}
+          onToast={showToast}
+          onOpenNode={openNodeFromDiary}
+          focusDay={diaryFocusDay}
+          onClearFocusDay={() => setDiaryFocusDay(null)}
+        />
+      ) : (
       <section
         ref={canvasRef}
         className="canvas"
@@ -960,6 +1115,19 @@ function App() {
                   <strong className="nodeTitle">{node.isKeyNode && <span className="keyBadge">★</span>}{node.title}</strong>
                   <time>{formatCompactDate(node.timestamp)}</time>
                   {selectedNodeId === node.id && <p>{node.detail || "No details yet."}</p>}
+                  {selectedNodeId === node.id && diaryApi && (
+                    <NodeDiarySection
+                      api={diaryApi}
+                      nodeId={node.id}
+                      nodeLabel={task.title ? `${task.title} · ${node.title}` : node.title}
+                      nodeDetail={node.detail ?? ""}
+                      nodeOptions={diaryNodeOptions}
+                      revision={diaryRevision}
+                      onToast={showToast}
+                      onChanged={bumpDiary}
+                      onOpenDay={(day, anchor) => setDayPopover({ nodeId: node.id, day, anchor })}
+                    />
+                  )}
                   {selectedNodeId === node.id && node.kind === "finish" && (
                     <div className="nodeActions">
                       <button className="done" onClick={(event) => { event.stopPropagation(); finishTask(task, node); }}>
@@ -1018,7 +1186,6 @@ function App() {
           ))}
         </div>
 
-        {toast && <div className="toast">{toast}</div>}
         {emojiRain.length > 0 && (
           <div className="emojiRain" aria-hidden="true">
             {emojiRain.map((drop) => (
@@ -1061,6 +1228,27 @@ function App() {
         )}
 
       </section>
+      )}
+
+      {/* 提示挂在 shell 层：画布和日记两个视图都要能看到它。position: fixed 不参与 .shell 的网格布局。 */}
+      {toast && <div className="toast">{toast}</div>}
+
+      {/* 当日弹层也挂在 shell 层、用屏幕坐标（N2）：放进带 transform 的画布世界会被缩放甚至被裁掉。 */}
+      {dayPopover && diaryApi && (
+        <DayDiaryPopover
+          api={diaryApi}
+          nodeId={dayPopover.nodeId}
+          nodeLabel={diaryNodeOptions.find((option) => option.id === dayPopover.nodeId)?.label}
+          day={dayPopover.day}
+          anchor={dayPopover.anchor}
+          nodeOptions={diaryNodeOptions}
+          revision={diaryRevision}
+          onToast={showToast}
+          onChanged={bumpDiary}
+          onClose={() => setDayPopover(null)}
+          onOpenBoard={(day) => { setDayPopover(null); setDiaryFocusDay(day); setMainView("diary"); }}
+        />
+      )}
 
       {noteDraft && (
         <div className="modalBackdrop" onPointerDown={() => setNoteDraft(null)}>
@@ -1188,6 +1376,34 @@ function App() {
                 ))}
               </select>
             </label>
+            {agentApprovals.length > 0 && (
+              <section className="agentApprovals" aria-label="待确认的 Agent 修改">
+                <header>
+                  <strong>待确认的修改</strong>
+                  <small>{agentApprovals.length} 项 · 确认前不会改动你的看板</small>
+                </header>
+                {agentApprovals.map((approval) => (
+                  <article key={approval.approvalId} className="agentApprovalCard">
+                    <div className="agentApprovalTitle">
+                      <strong>{approval.summary || approval.type}</strong>
+                      {approval.reason ? <small>理由：{approval.reason}</small> : null}
+                    </div>
+                    {approval.diff?.lines?.length ? (
+                      <ul className="agentApprovalDiff">
+                        {approval.diff.lines.map((line, index) => <li key={index}>{line}</li>)}
+                      </ul>
+                    ) : null}
+                    {approval.type === "board_change" ? (
+                      <p className="agentApprovalNote">原文件已自动备份，确认前不会写入。</p>
+                    ) : null}
+                    <div className="agentApprovalActions">
+                      <button type="button" className="primary" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "approved")}>保留</button>
+                      <button type="button" className="ghost" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "rejected")}>丢弃</button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
             <div className="agentConversation">
               <header>
                 <strong>{agentSessionLabel}</strong>
@@ -1204,7 +1420,7 @@ function App() {
                   </div>
                   <div className={`agentBubble assistant ${turn.status === "streaming" ? "streaming" : ""}`}>
                     <small>{turn.status === "streaming" ? "Agent 正在回复" : turn.source === "openai" ? `API · ${turn.model || settings.agentModel}` : turn.status === "failed" ? "发送失败" : "模型"}</small>
-                    <p>{turn.status === "failed" ? "模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。" : turn.assistantText || (turn.status === "streaming" ? "正在思考" : "等待模型回复...")} {turn.status === "streaming" && <span className="agentCursor" aria-hidden="true" />}</p>
+                    <div className="agentMarkdown">{turn.status === "failed" ? <p>模型请求失败，请检查 API、Redis 或 Mem0 配置后重试。</p> : <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{turn.assistantText || (turn.status === "streaming" ? "正在思考" : "等待模型回复...")}</ReactMarkdown>} {turn.status === "streaming" && <span className="agentCursor" aria-hidden="true" />}</div>
                   </div>
                 </article>
               ))}

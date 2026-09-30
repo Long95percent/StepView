@@ -1,11 +1,14 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
-import fs from "node:fs/promises";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
 import { createGateway } from "./gateway/createGateway.js";
+import { createDiaryIpcHandlers } from "./diaryIpcHandlers.js";
 import { streamOpenAIChat } from "./openAiStream.js";
+import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
+import { completeChatWithTools } from "./agentChatCompletion.js";
+import { exportArchive, inspectArchive, restoreArchive } from "./db/archive.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -16,11 +19,6 @@ const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5.1";
-
-function getChatCompletionsUrl(baseUrl) {
-  const normalized = String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, "");
-  return `${normalized}/chat/completions`;
-}
 
 function toRendererTurn(turn) {
   return {
@@ -75,26 +73,17 @@ async function askOpenAIWithMessages({
   model,
   baseUrl,
   messages,
+  tools,
+  runTool,
 }) {
-  const normalizedApiKey = String(apiKey || "").trim();
-  if (!normalizedApiKey) throw new Error("Missing OpenAI API key.");
-  const selectedModel = String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL;
-  const selectedBaseUrl = String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim() || DEFAULT_OPENAI_BASE_URL;
-
-  const response = await fetch(getChatCompletionsUrl(selectedBaseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${normalizedApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model: selectedModel, messages }),
+  return completeChatWithTools({
+    apiKey,
+    model: String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL,
+    baseUrl: String(baseUrl || DEFAULT_OPENAI_BASE_URL).trim() || DEFAULT_OPENAI_BASE_URL,
+    messages,
+    tools,
+    runTool,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `OpenAI request failed with ${response.status}.`);
-  }
-  const text = payload.choices?.[0]?.message?.content?.trim();
-  return { text: text || "OpenAI returned an empty response.", model: selectedModel };
 }
 
 if (!gotSingleInstanceLock) {
@@ -151,11 +140,92 @@ app.whenReady().then(async () => {
   ipcMain.handle("account:switch", (_event, input) => gateway.switchAccount(input));
   ipcMain.handle("account:import-personal-data", (_event, input) => gateway.importPersonalData(input));
   ipcMain.handle("board:reveal", async () => {
+    // 画布已经落库，这里先把库里的画布导出成 JSON 再打开，用户看到的始终是当前数据。
     const context = gateway.getContext();
-    await fs.mkdir(path.dirname(context.boardStorage.boardPath()), { recursive: true });
-    await shell.showItemInFolder(context.boardStorage.boardPath());
-    return context.boardStorage.boardPath();
+    const exportedPath = await context.boardStorage.exportBoard();
+    await shell.showItemInFolder(exportedPath);
+    return exportedPath;
   });
+  // 统一的备份与恢复。导出只读两个库，恢复先校验再替换，当前数据改名保留不删除。
+  // 校验标准（支持的 schema 版本、必须有的表）由 electron/db/archive.js 定义，这里不再抄一份。
+  async function pickArchiveDirectory({ title, create }) {
+    const properties = ["openDirectory"];
+    if (create) properties.push("createDirectory");
+    const choice = await dialog.showOpenDialog({ title, properties });
+    if (choice.canceled || !choice.filePaths[0]) return null;
+    return choice.filePaths[0];
+  }
+
+  ipcMain.handle("data:export-archive", async () => {
+    const parentDir = await pickArchiveDirectory({ title: "选择备份导出的位置", create: true });
+    if (!parentDir) return { ok: false, canceled: true };
+    const paths = gateway.getDatabasePaths();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const result = exportArchive({
+      globalDbPath: paths.global,
+      accountDbPath: paths.account,
+      targetDir: path.join(parentDir, `stepview-backup-${stamp}`),
+      appVersion: app.getVersion(),
+      label: "manual",
+      // 个人模式不会建全局库文件，少它一份不算问题。
+      optionalDatabases: gateway.getMode() === "personal" ? ["global"] : [],
+    });
+    await shell.showItemInFolder(result.manifestPath);
+    return {
+      ok: true,
+      dir: result.dir,
+      databases: result.manifest.databases.map((database) => database.name),
+      skipped: result.skipped,
+      tables: result.manifest.databases.reduce((sum, database) => sum + database.tables.length, 0),
+    };
+  });
+
+  ipcMain.handle("data:inspect-archive", async (_event, request = {}) => {
+    const dir = request.dir || (await pickArchiveDirectory({ title: "选择要检查的备份目录" }));
+    if (!dir) return { ok: false, canceled: true };
+    const report = inspectArchive({ dir });
+    return { ok: report.ok, dir, exportedAt: report.manifest?.exportedAt || null, problems: report.problems, databases: report.databases };
+  });
+
+  ipcMain.handle("data:restore-archive", async (_event, request = {}) => {
+    const dir = request.dir || (await pickArchiveDirectory({ title: "选择要恢复的备份目录" }));
+    if (!dir) return { ok: false, canceled: true };
+
+    const report = inspectArchive({ dir });
+    if (!report.ok) return { ok: false, dir, problems: report.problems };
+
+    const confirmation = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["取消", "恢复并重启"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "用这份备份替换当前数据？",
+      detail: `备份时间：${report.manifest?.exportedAt || "未知"}\n\n当前的数据库会改名保留在数据目录里（后缀 .pre-restore-时间），不会被删除。替换完成后应用会自动重启。`,
+    });
+    if (confirmation.response !== 1) return { ok: false, canceled: true };
+
+    // 路径要在关闭网关之前取：家庭模式下账号库的位置取决于当前登录的账号。
+    const paths = gateway.getDatabasePaths();
+    // 先把所有连接关掉，再动文件：SQLite 还有连接打开时替换文件会读到半截状态。
+    await gateway.close();
+    let result;
+    try {
+      result = restoreArchive({ dir, targets: paths });
+    } catch (error) {
+      // 网关已经关了：把原来的数据重新打开，别把用户留在一个开不了画布的应用里。
+      await gateway.initialize();
+      throw error;
+    }
+    isQuittingAfterStorageFlush = true;
+    app.relaunch();
+    app.exit(0);
+    return { ok: true, restored: result.restored.map((entry) => entry.name), kept: result.kept.map((entry) => entry.path) };
+  });
+
+  // 日记通道集中定义在 diaryIpcHandlers.js，好让 IPC 与 HTTP 两条路能被同一组用例对拍。
+  for (const [channel, handler] of Object.entries(createDiaryIpcHandlers({ getContext: () => gateway.getContext() }))) {
+    ipcMain.handle(channel, handler);
+  }
   ipcMain.handle("agent:load-journal", async () => {
     return serializeSessionViews(await gateway.loadAgentJournal());
   });
@@ -163,21 +233,21 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:tools:run", async (_event, request = {}) => {
     const context = gateway.getContext();
     const sessionId = request.sessionId || null;
-    const result = await context.toolRuntime.run(request.toolId, request.input || {}, {
-      accountId: context.accountId,
-      agentId: "user",
-      workspaceId: request.workspaceId || null,
-      sessionId,
-      boardStorage: context.boardStorage,
-      memoryRepository: context.memoryRepository,
-      audit: (event) => sessionId && context.agentSqliteStore.recordSignal?.({ sessionId, kind: "tool_run", payload: event }),
-    });
-    if (result.result?.type?.endsWith?.("_proposal")) return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
-    if (result.result?.type === "memory_upsert" || result.result?.type === "board_change") return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    const result = await context.toolRuntime.run(request.toolId, request.input || {}, createToolContext(context, sessionId, { workspaceId: request.workspaceId || null }));
+    if (result.result?.type === "board_change") return result;
+    if (result.result?.type?.endsWith?.("_proposal") || result.result?.type === "memory_upsert") {
+      return { ...result, approval: context.approvalManager.submit(result.result, { accountId: context.accountId, sessionId }) };
+    }
     return result;
   });
-  ipcMain.handle("agent:approvals:list", () => { const context = gateway.getContext(); return context.approvalManager.list(context.accountId); });
-  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => { const context = gateway.getContext(); const entry = context.approvalManager.decide(request.approvalId, context.accountId, request.decision); if (entry.status === "approved" && entry.proposal.type === "memory_upsert") entry.appliedMemory = context.memoryRepository.upsert(entry.proposal.memory); return entry; });
+  ipcMain.handle("agent:approvals:list", () => {
+    const context = gateway.getContext();
+    return context.approvalService.list(context.accountId);
+  });
+  ipcMain.handle("agent:approvals:decide", (_event, request = {}) => {
+    const context = gateway.getContext();
+    return context.approvalService.decide(request.approvalId, context.accountId, request.decision);
+  });
   ipcMain.handle("agent:memory:list", (_event, options = {}) => gateway.getContext().memoryRepository.list(options));
   ipcMain.handle("agent:memory:feedback", (_event, request = {}) => gateway.getContext().memoryRepository.feedback(request.memoryId, request.action, { nextValue: request.nextValue, reason: request.reason }));
   ipcMain.handle("agent:memory:evidence", (_event, request = {}) => gateway.getContext().memoryRepository.listEvidence(request.memoryId));
@@ -205,6 +275,8 @@ app.whenReady().then(async () => {
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
+        tools: openAiToolSchemas(activeContext.toolRegistry),
+        runTool: createToolRunner(activeContext, sessionId),
       });
       if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");
       const view = await activeContext.agentService.completeChat(prepared, {
@@ -248,6 +320,8 @@ app.whenReady().then(async () => {
         model: request.model,
         baseUrl: request.baseUrl,
         messages: prepared.prompt.messages,
+        tools: openAiToolSchemas(activeContext.toolRegistry),
+        runTool: createToolRunner(activeContext, sessionId),
         onDelta: (delta) => event.sender.send("agent:chat-stream:event", { streamId: request.streamId, type: "delta", delta }),
       });
       if (!gateway.isCurrentContext(activeContext, activeGeneration)) throw new Error("Account changed during Agent request.");

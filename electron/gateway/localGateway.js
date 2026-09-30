@@ -1,7 +1,7 @@
 import path from "node:path";
-import fs from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { buildAgentMemory } from "../../src/agentMemory.js";
+import { boardHasContent, readBoardSnapshot, stageLegacyDatabaseFiles } from "../db/transfer.js";
+import { ACCOUNT_DB_FILE, GLOBAL_DB_FILE } from "../db/index.js";
 import { createAccountContext } from "./accountContext.js";
 import { createAccountStore } from "./accountStore.js";
 import { validateNetworkPolicy } from "./networkPolicy.js";
@@ -27,6 +27,20 @@ export function createLocalGateway({
     return config.dataDir ? path.resolve(config.dataDir) : appDataDir;
   }
 
+  /**
+   * 当前生效的两个数据库文件。备份与恢复都从这里取路径，避免各写一份"数据存在哪"的知识。
+   * 家庭模式下每个账号一个库，所以账号库的路径取决于当前登录的是谁。
+   */
+  function getDatabasePaths() {
+    const dataDir = getDataDir();
+    const accountId = context?.account?.accountId;
+    const accountDir = config.mode === "personal" || !accountId ? dataDir : path.join(dataDir, "accounts", accountId);
+    return {
+      global: path.join(dataDir, GLOBAL_DB_FILE),
+      account: accountId ? path.join(accountDir, ACCOUNT_DB_FILE) : null,
+    };
+  }
+
   function getCurrentAccount() {
     return config.mode === "personal" ? { id: PERSONAL_ACCOUNT_ID, accountId: PERSONAL_ACCOUNT_ID } : context?.account || null;
   }
@@ -42,36 +56,13 @@ export function createLocalGateway({
     if (config.mode === "family") {
       accountStore = accountStoreFactory({ dataDir, sessionTtlHours: config.sessionTtlHours });
     } else {
-      const { createBoardStorage } = await import("../boardStorage.js");
-      const { createAgentSqliteStore } = await import("../agentSqliteStore.js");
-      const { createRedisAgentCache } = await import("../agentRedisClient.js");
-      const { createMem0Client } = await import("../agentMem0Client.js");
-      const { createAgentService } = await import("../agentService.js");
-      const { createAgentMemorySqliteStore } = await import("../agentMemorySqliteStore.js");
-      const { createMemoryPluginManager } = await import("../agent/memoryPluginManager.js");
-      const { createMemoryExtractor } = await import("../agent/memoryExtractor.js");
-      const { createMemoryWriter } = await import("../agent/memoryWriter.js");
-      const { createContextOrchestrator } = await import("../agent/contextOrchestrator.js");
-      const { createToolRegistry } = await import("../agent/toolRegistry.js");
-      const { createToolRuntime } = await import("../agent/toolRuntime.js");
-      const { registerBuiltInTools } = await import("../agent/builtInTools.js");
-      const { createApprovalManager } = await import("../agent/approvalManager.js");
-      const boardStorage = createBoardStorage({ dataDir });
-      const agentSqliteStore = createAgentSqliteStore({ dataDir });
-      const redisCache = createRedisAgentCache();
-      const mem0Client = createMem0Client();
-      const memoryRepository = createAgentMemorySqliteStore({ dataDir, accountId: PERSONAL_ACCOUNT_ID });
-      const memoryPlugins = createMemoryPluginManager();
-      const memoryExtractor = createMemoryExtractor({ repository: memoryRepository });
-      const memoryWriter = createMemoryWriter({ repository: memoryRepository });
-      const policyExtractor = createMemoryExtractor({ repository: memoryRepository, writer: memoryWriter });
-      const contextOrchestrator = createContextOrchestrator({ repository: memoryRepository, memoryPlugins });
-      const toolRegistry = createToolRegistry();
-      registerBuiltInTools({ registry: toolRegistry });
-      const toolRuntime = createToolRuntime({ registry: toolRegistry });
-      const approvalManager = createApprovalManager();
-      const agentService = createAgentService({ sqliteStore: agentSqliteStore, redisCache, mem0Client, memoryExtractor: policyExtractor, contextOrchestrator });
-      context = { mode: config.mode, accountId: PERSONAL_ACCOUNT_ID, dataDir, boardStorage, agentSqliteStore, memoryRepository, memoryPlugins, contextOrchestrator, toolRegistry, toolRuntime, approvalManager, redisCache, mem0Client, agentService, close: async () => { await boardStorage.flushWrites(); await redisCache?.close?.(); agentSqliteStore.close(); await memoryPlugins.close(); memoryRepository.close(); } };
+      // 个人模式的数据目录就是 dataDir 本身（家庭模式才是 accountsDir/<accountId>），
+      // 这一点必须保持，否则升级后用户会找不到自己原来的画布。
+      context = accountContextFactory({
+        account: { id: PERSONAL_ACCOUNT_ID, accountId: PERSONAL_ACCOUNT_ID },
+        dataDir,
+        mode: config.mode,
+      });
     }
     initialized = true;
     return context;
@@ -138,54 +129,41 @@ export function createLocalGateway({
     return activateAccount(result.account, result.sessionId);
   }
 
+  /**
+   * 把个人模式的数据导入当前家庭账号。
+   *
+   * 全程走仓储：画布从账号库/旧 JSON 读出来再写进目标账号，旧的独立数据库文件由
+   * 数据库层复制并交给迁移器导入。源目录只读，不删不改。
+   */
   async function importPersonalData({ confirm = false } = {}) {
     if (config.mode !== "family") throw new Error("Personal data import is unavailable in personal mode.");
     const activeContext = requireContext();
-    const targetDir = activeContext.dataDir;
+    const account = activeContext.account;
     const sourceDir = getDataDir();
-    const files = ["stepview-board.json", "stepview-board.backup.json", "stepview-agent.sqlite"];
-    const existing = [];
-    for (const file of files) {
-      try {
-        const filePath = path.join(targetDir, file);
-        await fs.access(filePath);
-        if (file !== "stepview-agent.sqlite") {
-          existing.push(file);
-        } else {
-          const targetDb = new DatabaseSync(filePath);
-          const count = targetDb.prepare(`SELECT (SELECT COUNT(*) FROM agent_sessions) + (SELECT COUNT(*) FROM agent_turns) AS count`).get().count;
-          targetDb.close();
-          if (count > 0) existing.push(file);
-        }
-      } catch {}
-    }
-    if (existing.length && !confirm) throw new Error("Target account already has data; explicit confirmation is required.");
-    const backupDir = path.join(targetDir, `.import-backup-${Date.now()}`);
+    const accountsDir = path.join(sourceDir, "accounts");
+
+    const sourceBoard = await readBoardSnapshot({ dataDir: sourceDir });
+    const targetBoard = await activeContext.boardStorage.readBoard();
+    const hasExistingData = boardHasContent(targetBoard) || activeContext.agentSqliteStore.listSessions().length > 0;
+    if (hasExistingData && !confirm) throw new Error("Target account already has data; explicit confirmation is required.");
+
+    // 要覆盖已有数据时先做一次一致性备份（VACUUM INTO），比"复制文件再复制回来"可靠。
+    const backupPath = hasExistingData
+      ? activeContext.database.backups.createBackup({ connection: activeContext.database, label: "before-personal-import" }).path
+      : null;
+
+    if (sourceBoard) await activeContext.boardStorage.writeBoard(sourceBoard);
+
+    // 先关掉目标账号的连接，再复制旧库文件，最后重建上下文触发迁移导入。
     await activeContext.close();
     try {
-      if (existing.length) {
-        await fs.mkdir(backupDir, { recursive: true });
-        for (const file of existing) await fs.copyFile(path.join(targetDir, file), path.join(backupDir, file));
-      }
-      for (const file of files) {
-        const sourcePath = path.join(sourceDir, file);
-        const targetPath = path.join(targetDir, file);
-        try {
-          await fs.access(sourcePath);
-          await fs.copyFile(sourcePath, targetPath);
-          if (file === "stepview-agent.sqlite") {
-            const importedDb = new DatabaseSync(targetPath);
-            importedDb.close();
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") throw error;
-        }
-      }
-      context = accountContextFactory({ account: activeContext.account, accountsDir: path.join(sourceDir, "accounts") });
-      return { ok: true, accountId: activeContext.accountId, backupDir: existing.length ? backupDir : null };
+      const staged = stageLegacyDatabaseFiles({ sourceDir, targetDir: activeContext.dataDir });
+      context = accountContextFactory({ account, accountsDir });
+      return { ok: true, accountId: account.accountId, backupPath, staged };
     } catch (error) {
-      for (const file of existing) await fs.copyFile(path.join(backupDir, file), path.join(targetDir, file));
-      context = accountContextFactory({ account: activeContext.account, accountsDir: path.join(sourceDir, "accounts") });
+      // 重建上下文保证账号还能打开；备份路径写进错误信息，方便人工恢复。
+      context = accountContextFactory({ account, accountsDir });
+      if (backupPath) error.message = `${error.message}（导入前的备份：${backupPath}）`;
       throw error;
     }
   }
@@ -198,6 +176,8 @@ export function createLocalGateway({
     getContextGeneration: () => generation,
     isCurrentContext: (candidate, candidateGeneration) => candidate === context && candidateGeneration === generation,
     getContext: requireContext,
+    getDataDir,
+    getDatabasePaths,
     loadBoard,
     saveBoard,
     loadAgentJournal,

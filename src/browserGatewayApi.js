@@ -19,8 +19,22 @@ export function createBrowserGatewayApi() {
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Gateway request failed (${response.status}).`);
+    if (!response.ok) throw toRequestError(payload, response.status);
     return payload;
+  }
+
+  /**
+   * 把 HTTP 失败还原成一个带 code / statusCode 的错误。
+   *
+   * 只抛一句 message 的话，界面区分不了"版本冲突该重新载入"和"输入不合法该改内容"，
+   * 只能靠比对中文字符串——那是最脆的做法。这里让两边（IPC 抛的错、这里抛的错）
+   * 拿到的字段一致。
+   */
+  function toRequestError(payload, status) {
+    const error = new Error(payload?.error || `Gateway request failed (${status}).`);
+    error.statusCode = status;
+    error.code = payload?.code || null;
+    return error;
   }
 
   function acceptSession(payload) {
@@ -29,8 +43,47 @@ export function createBrowserGatewayApi() {
     return payload.account;
   }
 
+  function query(params = {}) {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") continue;
+      search.set(key, String(value));
+    }
+    const text = search.toString();
+    return text ? `?${text}` : "";
+  }
+
+  /**
+   * 日记通道。
+   *
+   * 形状必须和 electron/preload.js 里的 `diary: { ... }` 完全一致——方法名、参数、
+   * 连"读一条要传 { diaryId } 而不是裸 id"这种细节也要一样。界面只认 desktopApi.diary.*，
+   * 两边一旦漂移，就会出现"桌面模式好好的、家庭模式报 undefined"。
+   */
+  const diary = {
+    list: (options = {}) => request(`/diary${query(options)}`),
+    get: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}`),
+    create: (input = {}) => request("/diary", { method: "POST", body: input }),
+    update: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}`, { method: "PUT", body: input }),
+    trash: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}`, { method: "DELETE" }),
+    restore: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}/restore`, { method: "POST" }),
+    remove: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}?purge=1`, { method: "DELETE" }),
+    search: (options = {}) => {
+      const { query: text, ...rest } = options;
+      return request(`/diary/search${query({ ...rest, q: text })}`);
+    },
+    timeline: (options = {}) => request(`/diary/timeline${query(options)}`),
+    listTags: () => request("/diary/tags"),
+    listRevisions: (input = {}) => request(`/diary/${encodeURIComponent(input.diaryId)}/revisions${query({ limit: input.limit })}`),
+    listNodeEntries: (input = {}) => request(`/diary${query({ kind: "node", targetType: "node", targetId: input.nodeId, status: input.status, from: input.from, to: input.to, limit: input.limit, offset: input.offset })}`),
+    listDailyDays: (input = {}) => request(`/diary/days${query({ nodeId: input.nodeId, status: input.status, from: input.from, to: input.to })}`),
+    previewNodeNotes: () => request("/diary/import-node-notes"),
+    importNodeNotes: (input = {}) => request("/diary/import-node-notes", { method: "POST", body: input }),
+  };
+
   return {
     isBrowserGateway: true,
+    diary,
     getGatewayInfo: () => request("/gateway"),
     registerAccount: (input) => request("/accounts/register", { method: "POST", body: input }).then(acceptSession),
     login: (input) => request("/accounts/login", { method: "POST", body: input }).then(acceptSession),
@@ -43,8 +96,12 @@ export function createBrowserGatewayApi() {
       }
     },
     loadBoard: () => request("/board"),
+    loadSettings: () => request("/settings"),
+    saveSettings: (settings) => request("/settings", { method: "PUT", body: settings }),
     saveBoard: (board) => request("/board", { method: "PUT", body: board }),
     loadAgentJournal: () => request("/agent/journal"),
+    listAgentApprovals: () => request("/agent/approvals"),
+    decideAgentApproval: (input) => request("/agent/approvals/decide", { method: "POST", body: input }),
     chatAgent: (input) => request("/agent/chat", { method: "POST", body: input }),
     async chatAgentStream(input, onDelta) {
       const response = await fetch(`${apiBaseUrl()}/agent/chat/stream`, {
@@ -54,7 +111,7 @@ export function createBrowserGatewayApi() {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || `Gateway request failed (${response.status}).`);
+        throw toRequestError(payload, response.status);
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");

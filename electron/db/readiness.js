@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 /**
  * 就绪探针（readyz 用的那几项检查）。
@@ -11,7 +12,7 @@ import path from "node:path";
 // 低于这个剩余空间就算不健康。SQLite 写满会把 WAL 撑爆，宁可提前在探针上报警。
 export const DEFAULT_MIN_FREE_BYTES = 512 * 1024 * 1024;
 
-const PROBE_FILE = ".readiness-probe";
+const PROBE_FILE_PREFIX = ".readiness-probe-";
 
 /**
  * 数据目录能不能写、还剩多少空间。
@@ -24,13 +25,23 @@ export function checkDataDir({ dataDir, fsApi = fs, minFreeBytes = DEFAULT_MIN_F
     result.error = "数据目录未配置。";
     return result;
   }
-  const probePath = path.join(dataDir, PROBE_FILE);
+  const probePath = path.join(dataDir, `${PROBE_FILE_PREFIX}${randomUUID()}`);
+  let probeCreated = false;
   try {
     fsApi.mkdirSync(dataDir, { recursive: true });
-    fsApi.writeFileSync(probePath, String(Date.now()));
+    fsApi.writeFileSync(probePath, String(Date.now()), { flag: "wx" });
+    probeCreated = true;
     fsApi.unlinkSync(probePath);
+    probeCreated = false;
     result.writable = true;
   } catch (error) {
+    if (probeCreated) {
+      try {
+        fsApi.unlinkSync(probePath);
+      } catch {
+        // 探针清理失败不覆盖原始写入错误。
+      }
+    }
     result.error = error.message;
     return result;
   }

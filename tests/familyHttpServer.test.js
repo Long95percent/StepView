@@ -648,7 +648,7 @@ describe("gateway 可观测性", () => {
       config: { mode: "family", bindHost: "127.0.0.1", httpPort: 0, allowRegistration: true, sessionTtlHours: 1 },
       dataDir: tempDir,
       // 断言看的是"有没有这条日志、字段对不对"，不是把日志打到测试输出里。
-      logger: createLogger({ stream: { write: (chunk) => lines.push(JSON.parse(chunk)) }, now: () => new Date("2026-01-02T03:04:05.000Z") }),
+      logger: createLogger({ level: "info", stream: { write: (chunk) => lines.push(JSON.parse(chunk)) }, now: () => new Date("2026-01-02T03:04:05.000Z") }),
       redisProbeFactory: () => ({ check: async () => (redisOk ? { ok: true, latencyMs: 1, error: null } : { ok: false, latencyMs: 1, error: "connect ECONNREFUSED" }) }),
       ...(dataDirCheck ? { dataDirCheckFactory: dataDirCheck } : {}),
     });
@@ -668,6 +668,8 @@ describe("gateway 可观测性", () => {
     expect(body.checks.dataDir.ok).toBe(true);
     expect(body.checks.database.ok).toBe(true);
     expect(body.checks.redis.ok).toBe(false);
+    expect(body.checks.dataDir.dir).toBeUndefined();
+    expect(body.checks.redis.error).toBeUndefined();
   });
 
   it("数据目录写不进去时 readyz 返回 503", async () => {
@@ -705,6 +707,7 @@ describe("gateway 可观测性", () => {
     const address = await gateway.listen();
     const response = await fetch(`http://127.0.0.1:${address.port}/api/readyz`);
     expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Readiness check failed.", code: null });
     expect(lines.find((line) => line.event === "http_request").status).toBe(500);
     expect(lines.find((line) => line.event === "http_request_failed").error.message).toBe("探针炸了");
   });

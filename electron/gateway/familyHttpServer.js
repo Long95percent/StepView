@@ -106,6 +106,13 @@ function readLegacyGlobalSettings(accountStore) {
   return found;
 }
 
+function publicReadiness(check) {
+  return {
+    ...check,
+    checks: Object.fromEntries(Object.entries(check.checks || {}).map(([name, value]) => [name, value ? { ok: Boolean(value.ok) } : null])),
+  };
+}
+
 async function askOpenAI({ apiKey, model, baseUrl, messages, tools, runTool, complete = completeChatWithTools }) {
   if (!String(apiKey || "").trim()) throw Object.assign(new Error("Missing OpenAI API key."), { statusCode: 400 });
   try {
@@ -252,7 +259,8 @@ export function createFamilyHttpServer({
           startedAt,
           now,
         });
-        return json(response, check.ok ? 200 : 503, check, origin);
+        if (!check.ok || check.degraded.length) logger.warn("readiness_degraded", check);
+        return json(response, check.ok ? 200 : 503, publicReadiness(check), origin);
       }
       if (request.method === "POST" && url.pathname === "/api/agent/chat/stream") return await streamAgent(request, response, origin);
       if (request.method === "GET" && url.pathname === "/api/gateway") {
@@ -439,7 +447,8 @@ export function createFamilyHttpServer({
       // 只靠 HTTP 状态码不够精确，而且这里和 IPC 通道要能被同一组用例对拍。
       const status = error.statusCode || 500;
       if (status >= 500) failed = error;
-      return json(response, status, { error: error.message || "Gateway request failed.", code: error.code || null }, origin);
+      const message = path === "/api/readyz" && status >= 500 ? "Readiness check failed." : error.message || "Gateway request failed.";
+      return json(response, status, { error: message, code: error.code || null }, origin);
     } finally {
       // 一条请求一行。5xx 单独再记一条 error，方便按 level 告警。
       const fields = {

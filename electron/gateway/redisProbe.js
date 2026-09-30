@@ -30,15 +30,16 @@ export function createRedisProbe({
 
   async function run() {
     const startedAt = now();
-    const client = clientFactory({ url });
+    let client = null;
     try {
+      client = clientFactory({ url });
       const reply = await withTimeout(client.command("PING"), timeoutMs, "Redis PING 超时。");
       return { ok: String(reply).toUpperCase() === "PONG", latencyMs: now() - startedAt, error: null };
     } catch (error) {
-      return { ok: false, latencyMs: now() - startedAt, error: error.message };
+      return { ok: false, latencyMs: now() - startedAt, error: error?.message || String(error) };
     } finally {
       // close() 会先发 QUIT，Redis 不通时它自己也可能卡住，所以这里也加超时。
-      await withTimeout(client.close(), closeTimeoutMs, "Redis 关闭超时。").catch(() => {});
+      if (client) await withTimeout(client.close(), closeTimeoutMs, "Redis 关闭超时。").catch(() => {});
     }
   }
 

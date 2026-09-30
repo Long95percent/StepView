@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -50,6 +50,14 @@ describe("就绪探针", () => {
 
   it("没有数据目录直接判不就绪", () => {
     expect(checkDataDir({ dataDir: "" })).toMatchObject({ ok: false, writable: false });
+  });
+
+  it("不会覆盖数据目录中已有的探针同名前缀文件", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "stepview-readyz-"));
+    const existingPath = path.join(tempDir, ".readiness-probe-existing");
+    await writeFile(existingPath, "keep me", "utf8");
+    expect(checkDataDir({ dataDir: tempDir })).toMatchObject({ ok: true, writable: true });
+    expect(await readFile(existingPath, "utf8")).toBe("keep me");
   });
 
   it("数据库读不出来就不就绪", () => {

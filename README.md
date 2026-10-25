@@ -188,10 +188,13 @@ STEPVIEW_SECRET_KEY=<openssl rand -hex 32>
 macOS（Apple Silicon，自用 `.app`）：
 
 ```bash
-npm run dist:mac
+npm run dist:personal:mac
 ```
 
-产物位于 `release/mac-arm64/StepView.app`，可以直接复制到 `/Applications`。开发模式使用独立的 `StepView Dev` 用户数据目录，不会与日用版混用。
+产物位于 `release/personal/`，包含 `StepView Personal.app`、可分发的 `.dmg` 和 `.zip`。
+把应用拖进 `/Applications` 即可使用。个人版不需要账号，数据继续保存在原来的
+`~/Library/Application Support/StepView/`，升级不会换到新的数据目录。
+开发模式使用独立的 `StepView Dev` 用户数据目录，不会与日用版混用。
 
 Windows：
 

@@ -1,0 +1,18 @@
+appId: com.stepview.app
+productName: StepView Personal
+
+directories:
+  output: release/personal
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - src/**/*
+  - package.json
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dir
+  artifactName: StepView-Personal-${version}-${arch}.${ext}
+  identity: null

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBoardStorage } from "../electron/boardStorage.js";
+import { normalizeBoard } from "../src/progressCore.js";
 
 const emptyBoard = { tasks: [], stickers: [], links: [], branches: [], achievements: [], agentMemory: null };
 
@@ -26,7 +27,7 @@ describe("board storage", () => {
     await writeFile(path.join(tempDir, "stepview-board.json"), "{broken", "utf8");
     await writeFile(path.join(tempDir, "stepview-board.backup.json"), JSON.stringify(board), "utf8");
 
-    await expect(storage.readBoard()).resolves.toEqual({ ...board, updatedAt: null });
+    await expect(storage.readBoard()).resolves.toEqual(normalizeBoard({ ...board, updatedAt: null }));
   });
 
   it("writes via a temporary file and keeps a recoverable backup", async () => {
@@ -37,8 +38,8 @@ describe("board storage", () => {
     await storage.writeBoard(first);
     await storage.writeBoard(second);
 
-    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(second);
-    await expect(readFile(path.join(tempDir, "stepview-board.backup.json"), "utf8").then(JSON.parse)).resolves.toEqual(first);
+    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(normalizeBoard(second));
+    await expect(readFile(path.join(tempDir, "stepview-board.backup.json"), "utf8").then(JSON.parse)).resolves.toEqual(normalizeBoard(first));
   });
 
   it("continues saving after one queued write fails", async () => {
@@ -97,12 +98,58 @@ describe("board storage", () => {
     reopened.close();
   });
 
+  it("persists Todos and planned node dates through the database and export mirror", async () => {
+    const storage = await makeStore();
+    const board = normalizeBoard({
+      tasks: [{
+        id: "task-1",
+        title: "发布",
+        status: "active",
+        nodes: [{
+          id: "plan-1",
+          kind: "plan-milestone",
+          title: "上线",
+          plannedFor: "2026-10-25",
+          timestamp: "2026-10-20T09:00:00.000Z",
+        }],
+        edges: [],
+      }],
+      todos: [{
+        id: "todo-1",
+        title: "跑回归测试",
+        detail: "覆盖升级和数据恢复",
+        date: "2026-10-25",
+        status: "open",
+        createdAt: "2026-10-24T09:00:00.000Z",
+        updatedAt: "2026-10-24T09:00:00.000Z",
+        completedAt: null,
+      }],
+      todoStartedOn: "2026-10-21",
+      updatedAt: "2026-10-24T09:00:00.000Z",
+    });
+
+    await storage.writeBoard(board);
+
+    const loaded = await storage.readBoard();
+    expect(loaded).toEqual(board);
+    expect(loaded.todos[0]).toMatchObject({ title: "跑回归测试", date: "2026-10-25" });
+    expect(loaded.tasks[0].nodes[0].plannedFor).toBe("2026-10-25");
+    expect(loaded.todoStartedOn).toBe("2026-10-21");
+
+    storage.close();
+    const reopened = createBoardStorage({ dataDir: tempDir });
+    await expect(reopened.readBoard()).resolves.toEqual(board);
+    reopened.close();
+
+    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(board);
+  });
+
   it("exports the current board to a readable JSON file", async () => {
     const storage = await makeStore();
     const board = { tasks: [{ id: "task-1" }], stickers: [], links: [], branches: [], achievements: [], agentMemory: null, updatedAt: "2026-05-18T09:30:00.000Z" };
     await storage.writeBoard(board);
 
     await expect(storage.exportBoard()).resolves.toBe(path.join(tempDir, "stepview-board.json"));
-    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(board);
+    await expect(readFile(path.join(tempDir, "stepview-board.json"), "utf8").then(JSON.parse)).resolves.toEqual(normalizeBoard(board));
   });
 });

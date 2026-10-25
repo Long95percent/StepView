@@ -78,6 +78,19 @@ describe("progress board core", () => {
     expect(task.nodes).toHaveLength(2);
   });
 
+  it("stores an optional planned completion date on a new plan milestone", () => {
+    const task = buildTask("带日期的计划", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const planned = addPlanMilestoneAfter(task, task.nodes[0].id, {
+      title: "发布",
+      detail: "按计划上线",
+      timestamp: "2026-05-19T12:00:00.000Z",
+      plannedFor: "2026-05-25",
+    });
+
+    expect(planned.nodes[1].plannedFor).toBe("2026-05-25");
+    expect(planned.nodes[1].timestamp).toBe("2026-05-19T12:00:00.000Z");
+  });
+
   it("moves nodes and emoji stickers without mutating the original board", () => {
     const task = buildTask("可拖拽", { x: 600, y: 240 }, new Date("2026-05-18T09:30:00Z"));
     const sticker = createEmojiSticker("✨", { x: 100, y: 100 });
@@ -114,6 +127,24 @@ describe("progress board core", () => {
     const board = normalizeBoard({ tasks: [], stickers: [] });
 
     expect(board.branches).toEqual([]);
+    expect(board.todos).toEqual([]);
+    expect(board.todoStartedOn).toBeNull();
+  });
+
+  it("keeps valid Todo state and drops malformed persisted Todos", () => {
+    const board = normalizeBoard({
+      tasks: [],
+      todos: [
+        { id: "todo-1", title: "保留", date: "2026-10-25", status: "open" },
+        { id: "todo-2", title: "坏日期", date: "2026-02-30", status: "open" },
+      ],
+      todoStartedOn: "2026-10-21",
+    });
+
+    expect(board.todos).toEqual([
+      expect.objectContaining({ id: "todo-1", title: "保留", date: "2026-10-25" }),
+    ]);
+    expect(board.todoStartedOn).toBe("2026-10-21");
   });
 
   it("creates a branch node without replacing the main path", () => {
@@ -608,6 +639,8 @@ describe("progress board core", () => {
     expect(hasBoardContent({ tasks: [], stickers: [] })).toBe(false);
     expect(hasBoardContent({ tasks: [task], stickers: [] })).toBe(true);
     expect(hasBoardContent({ tasks: [], stickers: [createEmojiSticker("✨", { x: 1, y: 2 })] })).toBe(true);
+    expect(hasBoardContent({ tasks: [], stickers: [], todos: [{ id: "todo-1" }] })).toBe(true);
+    expect(hasBoardContent({ tasks: [], stickers: [], todoStartedOn: "2026-10-21" })).toBe(true);
   });
 
   it("recovers backup content when the primary stored board is empty", () => {
@@ -626,6 +659,18 @@ describe("progress board core", () => {
     const backup = { tasks: [newTask], stickers: [], updatedAt: "2026-05-19T09:30:00.000Z" };
 
     expect(chooseStoredBoard(primary, backup)).toEqual(normalizeBoard(backup));
+  });
+
+  it("does not discard a backup that contains only Todo history", () => {
+    const backup = {
+      tasks: [],
+      stickers: [],
+      todoStartedOn: "2026-10-21",
+      todos: [{ id: "todo-1", title: "永久记录", date: "2026-10-21", status: "completed" }],
+      updatedAt: "2026-10-25T09:30:00.000Z",
+    };
+
+    expect(chooseStoredBoard({ tasks: [], stickers: [] }, backup)).toEqual(normalizeBoard(backup));
   });
 
   it("formats compact labels as year and date", () => {

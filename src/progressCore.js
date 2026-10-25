@@ -1,3 +1,5 @@
+import { normalizeDateKey, normalizeTodoStartedOn, normalizeTodos } from "./todo/todoCore.js";
+
 const HORIZONTAL_GAP = 280;
 const BRANCH_GAP_X = 220;
 const BRANCH_GAP_Y = 150;
@@ -151,6 +153,8 @@ export function normalizeBoard(value) {
     links: Array.isArray(value?.links) ? value.links : [],
     branches: Array.isArray(value?.branches) ? value.branches : [],
     achievements: Array.isArray(value?.achievements) ? value.achievements : [],
+    todos: normalizeTodos(value?.todos),
+    todoStartedOn: normalizeTodoStartedOn(value?.todoStartedOn),
     agentMemory: value?.agentMemory && typeof value.agentMemory === "object" ? value.agentMemory : null,
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
@@ -242,7 +246,11 @@ export function unlockBoardAchievements(board) {
 }
 
 export function hasBoardContent(board) {
-  return board.tasks.length > 0 || board.stickers.length > 0 || (board.branches || []).length > 0;
+  return board.tasks.length > 0
+    || board.stickers.length > 0
+    || (board.branches || []).length > 0
+    || (board.todos || []).length > 0
+    || Boolean(normalizeTodoStartedOn(board.todoStartedOn));
 }
 
 /**
@@ -469,6 +477,7 @@ export function addBranchMilestoneAfter(board, branchId, sourceNodeId, note) {
   const typeConfig = BRANCH_TYPES[branch.type] || BRANCH_TYPES.self;
   const nodeId = makeId("node");
   const timestamp = note.timestamp ? new Date(note.timestamp).toISOString() : new Date().toISOString();
+  const plannedFor = normalizeDateKey(note.plannedFor);
   const node = {
     id: nodeId,
     taskId: branch.taskId,
@@ -479,6 +488,7 @@ export function addBranchMilestoneAfter(board, branchId, sourceNodeId, note) {
     title: note.title?.trim() || "Branch step",
     detail: note.detail || "",
     timestamp,
+    ...(plannedFor ? { plannedFor } : {}),
     x: sourceNode.x + BRANCH_GAP_X,
     y: sourceNode.y,
   };
@@ -618,18 +628,21 @@ function addNodeAfter(task, sourceNodeId, node) {
 }
 
 export function addMilestoneAfter(task, sourceNodeId, note) {
+  const plannedFor = normalizeDateKey(note.plannedFor);
   const milestone = {
     kind: "milestone",
     emoji: ICONS.milestone,
     title: note.title.trim() || "New milestone",
     detail: note.detail.trim(),
     timestamp: note.timestamp,
+    ...(plannedFor ? { plannedFor } : {}),
   };
 
   return addNodeAfter(task, sourceNodeId, milestone);
 }
 
 export function addPlanMilestoneAfter(task, sourceNodeId, note) {
+  const plannedFor = normalizeDateKey(note.plannedFor);
   const planMilestone = {
     kind: "plan-milestone",
     status: "planned",
@@ -637,6 +650,7 @@ export function addPlanMilestoneAfter(task, sourceNodeId, note) {
     title: note.title.trim() || "New plan",
     detail: note.detail.trim(),
     timestamp: note.timestamp,
+    ...(plannedFor ? { plannedFor } : {}),
   };
 
   return addNodeAfter(task, sourceNodeId, planMilestone);

@@ -219,6 +219,7 @@ function App() {
   const [emojiCategoryId, setEmojiCategoryId] = React.useState(EMOJI_CATEGORIES[0].id);
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [gatewayInfo, setGatewayInfo] = React.useState(null);
+  const supportsAccounts = gatewayInfo?.product?.capabilities?.accounts ?? gatewayInfo?.mode === "family";
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
   const agentMessageListRef = React.useRef(null);
@@ -954,7 +955,7 @@ function App() {
         <div className="brand">
           <span>{emoji(0x1fa90)}</span>
           <div>
-            <strong>StepView ✨</strong>
+            <strong>{gatewayInfo?.product?.displayName || "StepView"} ✨</strong>
           </div>
         </div>
 
@@ -973,7 +974,7 @@ function App() {
           </button>
         </div>
 
-        {gatewayInfo?.mode === "family" && gatewayInfo.account && (
+        {supportsAccounts && gatewayInfo.account && (
           <section className="accountPanel">
             <h2>Account</h2>
             <p>{gatewayInfo.account.displayName || gatewayInfo.account.username}</p>

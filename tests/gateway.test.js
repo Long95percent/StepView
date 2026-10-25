@@ -20,6 +20,8 @@ describe("local gateway", () => {
     expect(gateway.getMode()).toBe("personal");
     expect(gateway.getCurrentAccount()).toMatchObject({ accountId: "local-personal" });
     expect(gateway.getContext().dataDir).toBe(tempDir);
+    expect(gateway.listAccounts()).toEqual([]);
+    await expect(gateway.login({ username: "alice", password: "password-1" })).rejects.toThrow("personal mode");
     await expect(gateway.loadBoard()).resolves.toMatchObject({ tasks: [], stickers: [], links: [] });
   });
 

@@ -1,14 +1,9 @@
 ﻿const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("stepview", {
+const modeArgument = process.argv.find((argument) => argument.startsWith("--stepview-mode="));
+const mode = modeArgument?.slice("--stepview-mode=".length) || "personal";
+const api = {
   getGatewayInfo: () => ipcRenderer.invoke("gateway:info"),
-  listAccounts: () => ipcRenderer.invoke("account:list"),
-  registerAccount: (input) => ipcRenderer.invoke("account:register", input),
-  login: (input) => ipcRenderer.invoke("account:login", input),
-  logout: () => ipcRenderer.invoke("account:logout"),
-  getCurrentAccount: () => ipcRenderer.invoke("account:current"),
-  switchAccount: (input) => ipcRenderer.invoke("account:switch", input),
-  importPersonalData: (input) => ipcRenderer.invoke("account:import-personal-data", input),
   loadBoard: () => ipcRenderer.invoke("board:load"),
   saveBoard: (board) => ipcRenderer.invoke("board:save", board),
   loadSettings: () => ipcRenderer.invoke("settings:load"),
@@ -58,4 +53,18 @@ contextBridge.exposeInMainWorld("stepview", {
     previewNodeNotes: () => ipcRenderer.invoke("diary:preview-node-notes"),
     importNodeNotes: (input) => ipcRenderer.invoke("diary:import-node-notes", input),
   },
-});
+};
+
+if (mode === "family") {
+  Object.assign(api, {
+    listAccounts: () => ipcRenderer.invoke("account:list"),
+    registerAccount: (input) => ipcRenderer.invoke("account:register", input),
+    login: (input) => ipcRenderer.invoke("account:login", input),
+    logout: () => ipcRenderer.invoke("account:logout"),
+    getCurrentAccount: () => ipcRenderer.invoke("account:current"),
+    switchAccount: (input) => ipcRenderer.invoke("account:switch", input),
+    importPersonalData: (input) => ipcRenderer.invoke("account:import-personal-data", input),
+  });
+}
+
+contextBridge.exposeInMainWorld("stepview", api);

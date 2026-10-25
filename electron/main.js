@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
 import { loadConfig } from "./config.js";
+import { resolveProduct } from "./product.js";
 import { createGateway } from "./gateway/createGateway.js";
 import { createDiaryIpcHandlers } from "./diaryIpcHandlers.js";
 import { streamOpenAIChat } from "./openAiStream.js";
@@ -12,15 +14,18 @@ import { exportArchive, inspectArchive, restoreArchive } from "./db/archive.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
-app.setName("StepView");
-if (isDev) app.setPath("userData", path.join(app.getPath("appData"), "StepView Dev"));
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const config = loadConfig({
   env: {
     ...process.env,
     STEPVIEW_MODE: isDev ? (process.env.STEPVIEW_MODE || "personal") : "personal",
   },
 });
+const product = resolveProduct(config.mode);
+app.setName(product.displayName);
+const userDataDir = path.join(app.getPath("appData"), isDev ? "StepView Dev" : product.dataDirectoryName);
+fs.mkdirSync(userDataDir, { recursive: true });
+app.setPath("userData", userDataDir);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -118,7 +123,7 @@ function createWindow() {
     height: 920,
     minWidth: 1100,
     minHeight: 720,
-    title: "StepView",
+    title: product.windowTitle,
     backgroundColor: "#070912",
     autoHideMenuBar: true,
     titleBarStyle: "hiddenInset",
@@ -126,6 +131,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [`--stepview-mode=${config.mode}`],
     },
   });
 
@@ -153,7 +159,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("board:load", () => gateway.loadBoard());
   ipcMain.handle("board:save", (_event, board) => gateway.saveBoard(board));
-  ipcMain.handle("gateway:info", () => ({ mode: gateway.getMode(), account: gateway.getCurrentAccount() }));
+  ipcMain.handle("gateway:info", () => ({
+    mode: gateway.getMode(),
+    account: gateway.getCurrentAccount(),
+    product: { id: product.id, displayName: product.displayName, capabilities: product.capabilities },
+    appVersion: app.getVersion(),
+  }));
   // 设置走账号库（见 electron/settingsService.js）：桌面模式和家庭模式同一个仓储，
   // 于是"桌面模式好好的、家庭模式串号"这类分裂不会再出现。返回的形状里没有明文 Key。
   ipcMain.handle("settings:load", () => gateway.getContext().settingsService.readForClient());
@@ -163,13 +174,15 @@ app.whenReady().then(async () => {
   ipcMain.handle("settings:import-legacy", () => {
     throw new Error("桌面模式没有需要导入的旧设置。");
   });
-  ipcMain.handle("account:list", () => gateway.listAccounts());
-  ipcMain.handle("account:register", (_event, input) => gateway.registerAccount(input));
-  ipcMain.handle("account:login", (_event, input) => gateway.login(input));
-  ipcMain.handle("account:logout", () => gateway.logout());
-  ipcMain.handle("account:current", () => gateway.getCurrentAccount());
-  ipcMain.handle("account:switch", (_event, input) => gateway.switchAccount(input));
-  ipcMain.handle("account:import-personal-data", (_event, input) => gateway.importPersonalData(input));
+  if (product.capabilities.accounts) {
+    ipcMain.handle("account:list", () => gateway.listAccounts());
+    ipcMain.handle("account:register", (_event, input) => gateway.registerAccount(input));
+    ipcMain.handle("account:login", (_event, input) => gateway.login(input));
+    ipcMain.handle("account:logout", () => gateway.logout());
+    ipcMain.handle("account:current", () => gateway.getCurrentAccount());
+    ipcMain.handle("account:switch", (_event, input) => gateway.switchAccount(input));
+    ipcMain.handle("account:import-personal-data", (_event, input) => gateway.importPersonalData(input));
+  }
   ipcMain.handle("board:reveal", async () => {
     // 画布已经落库，这里先把库里的画布导出成 JSON 再打开，用户看到的始终是当前数据。
     const context = gateway.getContext();

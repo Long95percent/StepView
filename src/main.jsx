@@ -49,7 +49,8 @@ import { DayDiaryPopover } from "./diary/dayDiaryPopover";
 import { DiariesView } from "./diary/diariesView";
 import { collectNodeOptions } from "./diary/diaryViewCore";
 import { NodeDiarySection } from "./diary/nodeDiarySection";
-import { formatTodoDateShort, setNodePlannedFor } from "./todo/todoCore";
+import { ensureTodoStartedOn, formatTodoDateShort, setNodePlannedFor, toLocalDateKey } from "./todo/todoCore";
+import { TodosView } from "./todo/todosView";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -186,7 +187,7 @@ function App() {
   const [linkDrag, setLinkDrag] = React.useState(null);
   const [branchLinkDrag, setBranchLinkDrag] = React.useState(null);
   const [toast, setToast] = React.useState(null);
-  // 右侧主列显示什么。日记是独立板块，所以在这一列里切换，而不是再开一个窗口。
+  // 右侧主列显示什么。画布、日记和 Todo 都是独立板块，在这一列里切换。
   const [mainView, setMainView] = React.useState("canvas");
   // 从节点上的日期按钮点出来的当日弹层：{ nodeId, day, anchor }。
   // 它渲染在 shell 层、用屏幕坐标（N2）——节点在带 transform 的画布世界里，塞进节点卡片会跟着缩放。
@@ -682,12 +683,31 @@ function App() {
   };
 
   const clearBoard = () => {
-    if (confirm("Think twice: this will permanently clear all active tasks, completed journeys, and stickers. Continue?")) updateBoard(INITIAL_BOARD);
+    if (confirm("清空画布上的任务、已完成旅程和贴纸？Todo 与回忆箱会保留。")) {
+      updateBoard((current) => ({ ...INITIAL_BOARD, todos: current.todos, todoStartedOn: current.todoStartedOn }));
+    }
   };
 
   const showToast = (message) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 1700);
+  };
+
+  const ensureTodoTimeline = () => {
+    if (board.todoStartedOn) return true;
+    try {
+      updateBoard((current) => ensureTodoStartedOn(current, toLocalDateKey()));
+      return true;
+    } catch (error) {
+      showToast(error.message || "无法启动 Todo。");
+      return false;
+    }
+  };
+
+  const openTodoView = () => {
+    ensureTodoTimeline();
+    setDayPopover(null);
+    setMainView("todo");
   };
 
   /**
@@ -1003,6 +1023,9 @@ function App() {
           >
             📔 日记
           </button>
+          <button type="button" className={mainView === "todo" ? "active" : ""} onClick={openTodoView} title="Todo">
+            ✓ Todo
+          </button>
         </div>
 
         {supportsAccounts && gatewayInfo.account && (
@@ -1125,6 +1148,14 @@ function App() {
           onOpenNode={openNodeFromDiary}
           focusDay={diaryFocusDay}
           onClearFocusDay={() => setDiaryFocusDay(null)}
+        />
+      ) : mainView === "todo" ? (
+        <TodosView
+          board={board}
+          onUpdateBoard={updateBoard}
+          onOpenNode={openNodeFromDiary}
+          onToast={showToast}
+          onStartTodo={ensureTodoTimeline}
         />
       ) : (
       <section

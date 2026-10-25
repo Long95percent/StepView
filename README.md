@@ -196,6 +196,17 @@ npm run dist:personal:mac
 `~/Library/Application Support/StepView/`，升级不会换到新的数据目录。
 开发模式使用独立的 `StepView Dev` 用户数据目录，不会与日用版混用。
 
+个人版发布由 tag 触发。更新版本号并推送 `v*` tag 后，GitHub Actions 会运行测试、
+构建 `.dmg` / `.zip`，并把产物和 `SHA256SUMS.txt` 附到对应的 GitHub Release：
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+当前自用包使用 ad-hoc 签名，没有 Apple Developer ID 和 notarization。从浏览器下载后，
+首次运行如果被 Gatekeeper 拦截，需要在 Finder 里右键应用并选择“打开”。
+
 Windows：
 
 ```bash

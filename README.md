@@ -207,6 +207,10 @@ git push origin v1.2.0
 当前自用包使用 ad-hoc 签名，没有 Apple Developer ID 和 notarization。从浏览器下载后，
 首次运行如果被 Gatekeeper 拦截，需要在 Finder 里右键应用并选择“打开”。
 
+应用内更新是手动确认模式：打开 **Settings → 检查更新**。发现新版本后只会打开对应的
+GitHub Release 下载页，不会静默下载、替换或重启应用。下载新的 `.dmg` 后覆盖
+`/Applications` 里的旧版本即可，个人数据目录不会改变。
+
 Windows：
 
 ```bash

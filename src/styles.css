@@ -924,6 +924,43 @@ button { cursor: pointer; }
   color: #9fb0cc;
   background: rgba(255, 255, 255, .04);
 }
+.settingsUpdate {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(98, 180, 255, .2);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(17, 34, 66, .72), rgba(10, 19, 39, .62));
+}
+.settingsUpdateRow,
+.settingsUpdateResult {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settingsUpdateRow > div {
+  display: grid;
+  gap: 3px;
+}
+.settingsUpdateRow strong { color: #eef6ff; }
+.settingsUpdateRow small,
+.settingsUpdateMessage {
+  margin: 0;
+  color: #9fb4d5;
+  font-size: 12px;
+}
+.settingsUpdate button {
+  width: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.settingsUpdateResult p {
+  margin: 0;
+  color: #d9ecff;
+  font-size: 13px;
+}
+.settingsUpdateMessage.error { color: #ffb4bf; }
 .settingsHint code {
   padding: 1px 5px;
   border-radius: 6px;

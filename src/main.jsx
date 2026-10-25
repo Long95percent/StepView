@@ -220,6 +220,8 @@ function App() {
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [gatewayInfo, setGatewayInfo] = React.useState(null);
   const supportsAccounts = gatewayInfo?.product?.capabilities?.accounts ?? gatewayInfo?.mode === "family";
+  const supportsManualUpdates = gatewayInfo?.product?.capabilities?.manualUpdates ?? false;
+  const [updateState, setUpdateState] = React.useState({ status: "idle" });
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
   const agentMessageListRef = React.useRef(null);
@@ -402,6 +404,24 @@ function App() {
   const openSettings = () => {
     setSettingsDraft(settings);
     setSettingsOpen(true);
+  };
+
+  const checkForUpdates = async () => {
+    setUpdateState({ status: "checking" });
+    try {
+      setUpdateState(await desktopApi.checkForUpdate());
+    } catch (error) {
+      setUpdateState({ status: "error", message: error.message || "检查更新失败。" });
+    }
+  };
+
+  const openUpdateDownload = async () => {
+    try {
+      await desktopApi.openUpdateDownload();
+      setToast("已打开下载页面。");
+    } catch (error) {
+      setUpdateState({ status: "error", message: error.message || "无法打开下载页面。" });
+    }
   };
 
   const persistBoard = React.useCallback((nextBoard) => {
@@ -1461,6 +1481,28 @@ function App() {
             <button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button>
             <button className="primary">Save</button>
           </div>
+          {supportsManualUpdates && desktopApi?.checkForUpdate && (
+            <section className="settingsUpdate" aria-label="应用更新">
+              <div className="settingsUpdateRow">
+                <div>
+                  <strong>应用更新</strong>
+                  <small>StepView Personal · v{gatewayInfo.appVersion}</small>
+                </div>
+                <button type="button" className="ghost" onClick={checkForUpdates} disabled={updateState.status === "checking"}>
+                  {updateState.status === "checking" ? "检查中…" : "检查更新"}
+                </button>
+              </div>
+              {updateState.status === "available" && (
+                <div className="settingsUpdateResult">
+                  <p>发现新版本 v{updateState.latestVersion}。</p>
+                  <button type="button" onClick={openUpdateDownload}>下载更新</button>
+                </div>
+              )}
+              {updateState.status === "up-to-date" && <p className="settingsUpdateMessage">已是最新版本 v{updateState.currentVersion}。</p>}
+              {updateState.status === "no-release" && <p className="settingsUpdateMessage">还没有可用的个人版发布。</p>}
+              {updateState.status === "error" && <p className="settingsUpdateMessage error">{updateState.message}</p>}
+            </section>
+          )}
           {settings.legacyGlobalSettingsAvailable && (
             <p className="settingsNotice">
               检测到旧版本保存在服务器全局设置里的 API Key。它没有账号归属，所以不再回传给任何账号。

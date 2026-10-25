@@ -67,4 +67,11 @@ if (mode === "family") {
   });
 }
 
+if (mode === "personal") {
+  Object.assign(api, {
+    checkForUpdate: () => ipcRenderer.invoke("update:check"),
+    openUpdateDownload: () => ipcRenderer.invoke("update:open-download"),
+  });
+}
+
 contextBridge.exposeInMainWorld("stepview", api);

@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAgentMemory } from "../src/agentMemory.js";
@@ -11,6 +10,8 @@ import { streamOpenAIChat } from "./openAiStream.js";
 import { createToolContext, createToolRunner, openAiToolSchemas } from "./agent/toolBridge.js";
 import { completeChatWithTools } from "./agentChatCompletion.js";
 import { exportArchive, inspectArchive, restoreArchive } from "./db/archive.js";
+import { ensureUserDataDir } from "./db/userData.js";
+import { checkPersonalUpdate, isTrustedReleaseUrl } from "./personalUpdates.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
@@ -23,11 +24,12 @@ const config = loadConfig({
 const product = resolveProduct(config.mode);
 app.setName(product.displayName);
 const userDataDir = path.join(app.getPath("appData"), isDev ? "StepView Dev" : product.dataDirectoryName);
-fs.mkdirSync(userDataDir, { recursive: true });
+ensureUserDataDir(userDataDir);
 app.setPath("userData", userDataDir);
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
+let lastPersonalUpdate = null;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5.1";
 
@@ -174,6 +176,25 @@ app.whenReady().then(async () => {
   ipcMain.handle("settings:import-legacy", () => {
     throw new Error("桌面模式没有需要导入的旧设置。");
   });
+  if (product.capabilities.manualUpdates) {
+    ipcMain.handle("update:check", async () => {
+      lastPersonalUpdate = await checkPersonalUpdate({
+        currentVersion: app.getVersion(),
+        githubToken: process.env.GITHUB_TOKEN || "",
+      });
+      return lastPersonalUpdate;
+    });
+    ipcMain.handle("update:open-download", async () => {
+      lastPersonalUpdate = lastPersonalUpdate || await checkPersonalUpdate({
+        currentVersion: app.getVersion(),
+        githubToken: process.env.GITHUB_TOKEN || "",
+      });
+      const url = lastPersonalUpdate.downloadUrl || lastPersonalUpdate.releaseUrl;
+      if (!isTrustedReleaseUrl(url)) throw new Error("Update download URL is not trusted.");
+      await shell.openExternal(url);
+      return { ok: true };
+    });
+  }
   if (product.capabilities.accounts) {
     ipcMain.handle("account:list", () => gateway.listAccounts());
     ipcMain.handle("account:register", (_event, input) => gateway.registerAccount(input));

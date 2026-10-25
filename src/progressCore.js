@@ -148,7 +148,7 @@ const BRANCH_ANCHOR_OFFSETS = {
 
 export function normalizeBoard(value) {
   return {
-    tasks: Array.isArray(value?.tasks) ? value.tasks : [],
+    tasks: normalizeTaskPlanning(value?.tasks),
     stickers: Array.isArray(value?.stickers) ? value.stickers : [],
     links: Array.isArray(value?.links) ? value.links : [],
     branches: Array.isArray(value?.branches) ? value.branches : [],
@@ -158,6 +158,24 @@ export function normalizeBoard(value) {
     agentMemory: value?.agentMemory && typeof value.agentMemory === "object" ? value.agentMemory : null,
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
   };
+}
+
+function normalizeTaskPlanning(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  return tasks.map((task) => {
+    if (!task || !Array.isArray(task.nodes)) return task;
+    let changed = false;
+    const nodes = task.nodes.map((node) => {
+      if (!node || typeof node !== "object" || !Object.prototype.hasOwnProperty.call(node, "plannedFor")) return node;
+      const plannedFor = normalizeDateKey(node.plannedFor);
+      if (plannedFor && plannedFor === node.plannedFor) return node;
+      changed = true;
+      if (plannedFor) return { ...node, plannedFor };
+      const { plannedFor: _removed, ...rest } = node;
+      return rest;
+    });
+    return changed ? { ...task, nodes } : task;
+  });
 }
 
 export function getNextViewportScale(currentScale, deltaY) {

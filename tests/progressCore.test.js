@@ -147,6 +147,27 @@ describe("progress board core", () => {
     expect(board.todoStartedOn).toBe("2026-10-21");
   });
 
+  it("sanitizes plannedFor on stored nodes while preserving the rest of the node", () => {
+    const board = normalizeBoard({
+      tasks: [{
+        id: "task-1",
+        nodes: [
+          { id: "node-1", title: "保留", plannedFor: "2026-10-25" },
+          { id: "node-2", title: "清除非法值", plannedFor: "2026-02-30" },
+          { id: "node-3", title: "清除空值", plannedFor: null },
+          { id: "node-4", title: "未设置" },
+        ],
+      }],
+    });
+
+    expect(board.tasks[0].nodes).toEqual([
+      { id: "node-1", title: "保留", plannedFor: "2026-10-25" },
+      { id: "node-2", title: "清除非法值" },
+      { id: "node-3", title: "清除空值" },
+      { id: "node-4", title: "未设置" },
+    ]);
+  });
+
   it("creates a branch node without replacing the main path", () => {
     const task = buildTask("增加支线", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
     const board = normalizeBoard({ tasks: [task], stickers: [] });

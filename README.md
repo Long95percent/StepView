@@ -185,6 +185,16 @@ STEPVIEW_SECRET_KEY=<openssl rand -hex 32>
 
 ## 构建发布包
 
+macOS（Apple Silicon，自用 `.app`）：
+
+```bash
+npm run dist:mac
+```
+
+产物位于 `release/mac-arm64/StepView.app`，可以直接复制到 `/Applications`。开发模式使用独立的 `StepView Dev` 用户数据目录，不会与日用版混用。
+
+Windows：
+
 ```bash
 npm run dist:win
 ```

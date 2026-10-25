@@ -13,8 +13,14 @@ import { exportArchive, inspectArchive, restoreArchive } from "./db/archive.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.VITE_DEV_SERVER_URL;
 app.setName("StepView");
+if (isDev) app.setPath("userData", path.join(app.getPath("appData"), "StepView Dev"));
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
-const config = loadConfig();
+const config = loadConfig({
+  env: {
+    ...process.env,
+    STEPVIEW_MODE: isDev ? (process.env.STEPVIEW_MODE || "personal") : "personal",
+  },
+});
 const gateway = createGateway({ config, appDataDir: app.getPath("userData") });
 let isQuittingAfterStorageFlush = false;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";

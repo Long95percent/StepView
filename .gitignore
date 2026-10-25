@@ -3,5 +3,6 @@
 .stepview-runtime/
 node_modules/
 dist/assets/
+release/
 .env.local
 !.env.local.example

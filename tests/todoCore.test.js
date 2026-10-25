@@ -5,6 +5,7 @@ import {
   daysBetweenDateKeys,
   deleteTodo,
   ensureTodoStartedOn,
+  formatTodoDateShort,
   getPlannedNodesForDay,
   getTodoEntriesForDay,
   getTodoMemoryGroups,
@@ -78,6 +79,7 @@ describe("todo date rules", () => {
   it("derives the local date key without going through UTC", () => {
     const localNoon = new Date(2026, 9, 25, 12, 0, 0);
     expect(toLocalDateKey(localNoon)).toBe("2026-10-25");
+    expect(formatTodoDateShort("2026-10-25")).toBe("10月25日 周日");
   });
 });
 

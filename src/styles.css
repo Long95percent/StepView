@@ -715,6 +715,41 @@ button { cursor: pointer; }
 .node strong { display: block; line-height: 1.25; }
 .keyBadge { margin-right: 6px; color: #ffe681; text-shadow: 0 0 12px rgba(255, 214, 74, .8); }
 .node time { display: block; margin-top: 5px; font-size: 12px; }
+.nodePlanBadge {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border: 1px solid rgba(128, 247, 255, .28);
+  border-radius: 999px;
+  color: #a8edff;
+  font-size: 10.5px;
+  font-weight: 750;
+  background: rgba(0, 190, 255, .1);
+}
+.nodePlanEditor {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+}
+.nodePlanEditor label {
+  display: grid;
+  gap: 5px;
+  color: #aab9d4;
+  font-size: 11px;
+}
+.nodePlanEditor input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 9px;
+  color: #eef4ff;
+  background: rgba(4, 8, 20, .55);
+  color-scheme: dark;
+}
+.nodePlanEditor .ghost { padding: 6px 8px; font-size: 10.5px; }
 .node p { color: #cbd8ee; font-size: 13px; line-height: 1.5; }
 .add {
   width: 30px;

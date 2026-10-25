@@ -97,6 +97,12 @@ export function formatTodoDate(dayKey) {
   return `${date.getUTCFullYear()}年${date.getUTCMonth() + 1}月${date.getUTCDate()}日 ${WEEKDAYS[date.getUTCDay()]}`;
 }
 
+export function formatTodoDateShort(dayKey) {
+  const date = dateKeyToUtc(dayKey);
+  if (!date) return "";
+  return `${date.getUTCMonth() + 1}月${date.getUTCDate()}日 ${WEEKDAYS[date.getUTCDay()]}`;
+}
+
 function normalizeText(value, maxLength) {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, maxLength);

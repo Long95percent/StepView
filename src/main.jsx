@@ -49,6 +49,7 @@ import { DayDiaryPopover } from "./diary/dayDiaryPopover";
 import { DiariesView } from "./diary/diariesView";
 import { collectNodeOptions } from "./diary/diaryViewCore";
 import { NodeDiarySection } from "./diary/nodeDiarySection";
+import { formatTodoDateShort, setNodePlannedFor } from "./todo/todoCore";
 import "./styles.css";
 
 const STORAGE_KEY = "stepview-board-v1";
@@ -568,7 +569,7 @@ function App() {
   const addMilestone = (taskId, nodeId, kind = "milestone") => {
     const task = board.tasks.find((candidate) => candidate.id === taskId);
     const node = task?.nodes.find((candidate) => candidate.id === nodeId);
-    setNoteDraft({ taskId, nodeId, branchId: node?.branchId || null, kind, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16) });
+    setNoteDraft({ taskId, nodeId, branchId: node?.branchId || null, kind, title: "", detail: "", timestamp: new Date().toISOString().slice(0, 16), plannedFor: "" });
   };
 
   const saveMilestone = (event) => {
@@ -578,6 +579,7 @@ function App() {
         title: noteDraft.title,
         detail: noteDraft.detail,
         timestamp: new Date(noteDraft.timestamp).toISOString(),
+        plannedFor: noteDraft.plannedFor,
       }));
       setNoteDraft(null);
       return;
@@ -588,9 +590,18 @@ function App() {
         title: noteDraft.title,
         detail: noteDraft.detail,
         timestamp: new Date(noteDraft.timestamp).toISOString(),
+        plannedFor: noteDraft.plannedFor,
       }),
     );
     setNoteDraft(null);
+  };
+
+  const updateNodePlannedFor = (nodeId, plannedFor) => {
+    try {
+      updateBoard((current) => setNodePlannedFor(current, nodeId, plannedFor));
+    } catch (error) {
+      showToast(error.message);
+    }
   };
 
   const randomBranchAnchor = () => {
@@ -1240,6 +1251,13 @@ function App() {
                   </div>
                   <strong className="nodeTitle">{node.isKeyNode && <span className="keyBadge">★</span>}{node.title}</strong>
                   <time>{formatCompactDate(node.timestamp)}</time>
+                  {node.plannedFor && <span className="nodePlanBadge">计划 {formatTodoDateShort(node.plannedFor)}</span>}
+                  {selectedNodeId === node.id && (
+                    <div className="nodePlanEditor" onPointerDown={(event) => event.stopPropagation()}>
+                      <label>计划完成日期<input type="date" value={node.plannedFor || ""} onChange={(event) => updateNodePlannedFor(node.id, event.target.value)} /></label>
+                      {node.plannedFor && <button type="button" className="ghost" onClick={() => updateNodePlannedFor(node.id, null)}>清除日期</button>}
+                    </div>
+                  )}
                   {selectedNodeId === node.id && <p>{node.detail || "No details yet."}</p>}
                   {selectedNodeId === node.id && diaryApi && (
                     <NodeDiarySection
@@ -1383,6 +1401,7 @@ function App() {
             <label>Name<input autoFocus required value={noteDraft.title} onChange={(event) => setNoteDraft({ ...noteDraft, title: event.target.value })} /></label>
             <label>Note<textarea value={noteDraft.detail} onChange={(event) => setNoteDraft({ ...noteDraft, detail: event.target.value })} /></label>
             <label>Time<input type="datetime-local" value={noteDraft.timestamp} onChange={(event) => setNoteDraft({ ...noteDraft, timestamp: event.target.value })} /></label>
+            <label>计划完成日期（可选）<input type="date" value={noteDraft.plannedFor || ""} onChange={(event) => setNoteDraft({ ...noteDraft, plannedFor: event.target.value })} /></label>
             <div className="modalActions"><button type="button" onClick={() => setNoteDraft(null)}>Cancel</button><button className="primary">Save ✅</button></div>
           </form>
         </div>

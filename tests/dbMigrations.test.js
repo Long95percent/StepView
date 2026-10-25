@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -129,9 +130,28 @@ describe("database migrations", () => {
   it("opens an account database through the public entry point", () => {
     const db = openAccountDatabase({ dataDir: tempDir });
     expect(db.appliedMigrations.map((migration) => migration.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
+    expect(db.migrationBackup).toBeNull();
     expect(db.tableExists("kv")).toBe(true);
     expect(db.dbPath.endsWith("stepview.sqlite")).toBe(true);
     db.close();
+  });
+
+  it("snapshots an existing account database before applying pending migrations", () => {
+    const old = openAccountDatabase({ dataDir: tempDir, migrations: MIGRATIONS.slice(0, -1) });
+    old.db.prepare("INSERT INTO kv (key, value_json, updated_at) VALUES (?, ?, ?)").run("keep-me", JSON.stringify({ value: 42 }), NOW());
+    old.close();
+
+    const upgraded = openAccountDatabase({ dataDir: tempDir });
+    expect(upgraded.appliedMigrations.map((migration) => migration.version)).toEqual([MIGRATIONS.at(-1).version]);
+    expect(upgraded.migrationBackup).toMatchObject({ fileName: expect.stringContaining("before-migration") });
+    expect(existsSync(upgraded.migrationBackup.path)).toBe(true);
+    expect(upgraded.backups.list()).toHaveLength(1);
+    upgraded.close();
+
+    const snapshot = createConnection({ dbPath: upgraded.migrationBackup.path, readOnly: true });
+    expect(snapshot.db.prepare("SELECT value_json FROM kv WHERE key = ?").get("keep-me").value_json).toBe(JSON.stringify({ value: 42 }));
+    expect(Number(snapshot.db.prepare("PRAGMA user_version").get().user_version)).toBe(MIGRATIONS.length - 1);
+    snapshot.close();
   });
 
   it("leaves no partial tables behind and releases the file when a migration fails during open", () => {

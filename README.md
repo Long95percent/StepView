@@ -207,9 +207,56 @@ git push origin v1.2.0
 当前自用包使用 ad-hoc 签名，没有 Apple Developer ID 和 notarization。从浏览器下载后，
 首次运行如果被 Gatekeeper 拦截，需要在 Finder 里右键应用并选择“打开”。
 
-应用内更新是手动确认模式：打开 **Settings → 检查更新**。发现新版本后只会打开对应的
-GitHub Release 下载页，不会静默下载、替换或重启应用。下载新的 `.dmg` 后覆盖
-`/Applications` 里的旧版本即可，个人数据目录不会改变。
+### 个人版更新
+
+个人版是手动确认更新，不会静默下载、替换或重启应用：
+
+1. 打开 StepView Personal，进入 **Settings → 检查更新**。
+2. 发现新版本后点击 **下载更新**，浏览器会打开对应的 GitHub Release。
+3. 下载 `StepView-Personal-<版本>-arm64.dmg`。Release 里也提供
+   `SHA256SUMS.txt`，可用于核对下载文件是否完整。
+4. 用 `Command + Q` 完全退出旧版本。
+5. 打开下载的 DMG，把 `StepView Personal.app` 拖进 `/Applications`；如果系统询问，
+   选择替换旧版本。
+6. 重新打开应用。首次从浏览器下载运行时，如果被 Gatekeeper 拦截，在 Finder 里右键
+   应用并选择“打开”。
+
+如果没有看到新版本，先确认对应的 `v*` tag 已经触发 GitHub Actions，并在 Releases
+页面生成了带个人版 `.dmg` 的发布。
+
+### 更新后本地数据
+
+正常覆盖安装会保留原有本地数据。应用本身位于 `/Applications/StepView Personal.app`，
+数据不在应用包内，而是在：
+
+```text
+~/Library/Application Support/StepView/
+```
+
+这个目录包含画布、日记、设置和 API Key、Agent 会话与记忆、审批记录等
+`stepview.sqlite` 数据。应用启动时会显式使用这个固定目录，更新应用不会改名或切换
+数据目录，因此替换 `.app` 不会删除现有内容。
+
+数据库结构需要升级时，应用会在执行迁移前自动把旧库快照到：
+
+```text
+~/Library/Application Support/StepView/backups/
+```
+
+备份文件名带有 `before-migration` 标记，最多保留 5 份。迁移步骤在事务中执行；如果
+迁移失败会回滚。若数据库版本比当前应用更新，应用会拒绝打开，避免旧版程序用错误结构
+写坏数据。
+
+这些保护不能替代外部备份：磁盘损坏、手动删除 `Application Support/StepView`，或者
+误操作覆盖目录，仍然可能造成数据丢失。跨大版本更新前建议完整备份一次：
+
+```bash
+osascript -e 'tell application "StepView Personal" to quit'
+ditto "$HOME/Library/Application Support/StepView" \
+  "$HOME/Desktop/StepView-backup-$(date +%Y%m%d-%H%M%S)"
+```
+
+这个整目录备份也包含数据库加密所需的 `secret.key`，比只复制单个 SQLite 文件更完整。
 
 Windows：
 

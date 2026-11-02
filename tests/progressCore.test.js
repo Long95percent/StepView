@@ -34,6 +34,7 @@ import {
   normalizeBoard,
   restoreTask,
   toggleKeyNode,
+  toggleNodeComplete,
   togglePlanMilestoneComplete,
   wouldCreateCycle,
 } from "../src/progressCore";
@@ -76,6 +77,39 @@ describe("progress board core", () => {
     expect(planNode).toMatchObject({ kind: "plan-milestone", status: "planned", title: "先做登录" });
     expect(completed.nodes[1]).toMatchObject({ status: "completed", completedAt: "2026-05-20T08:00:00.000Z" });
     expect(task.nodes).toHaveLength(2);
+  });
+
+  it("completes branch and regular milestone nodes as well as plan milestones", () => {
+    const task = buildTask("完成所有节点类型", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const withRegular = addMilestoneAfter(task, task.nodes[0].id, {
+      title: "普通节点",
+      detail: "",
+      timestamp: "2026-05-19T12:00:00.000Z",
+    });
+    const regularId = withRegular.nodes[1].id;
+    const regularCompleted = toggleNodeComplete(withRegular, regularId, new Date("2026-05-20T08:00:00Z"));
+    const regularReopened = toggleNodeComplete(regularCompleted, regularId, new Date("2026-05-20T09:00:00Z"));
+
+    const board = normalizeBoard({ tasks: [task], stickers: [] });
+    const withBranch = addBranch(board, task.nodes[0].id, { type: "self", label: "分支任务" });
+    const branch = withBranch.branches[0];
+    const extended = addBranchMilestoneAfter(withBranch, branch.id, branch.toNodeId, {
+      title: "分支节点",
+      detail: "",
+      timestamp: "2026-05-19T13:00:00.000Z",
+    });
+    const branchTask = extended.tasks[0];
+    const branchNode = branchTask.nodes.find((node) => node.previousBranchNodeId);
+    const branchCompleted = toggleNodeComplete(branchTask, branchNode.id, new Date("2026-05-20T10:00:00Z"));
+    const branchReopened = toggleNodeComplete(branchCompleted, branchNode.id, new Date("2026-05-20T11:00:00Z"));
+
+    expect(regularCompleted.nodes[1]).toMatchObject({ status: "completed", completedAt: "2026-05-20T08:00:00.000Z" });
+    expect(regularReopened.nodes[1]).not.toHaveProperty("status");
+    expect(branchCompleted.nodes.find((node) => node.id === branchNode.id)).toMatchObject({
+      status: "completed",
+      completedAt: "2026-05-20T10:00:00.000Z",
+    });
+    expect(branchReopened.nodes.find((node) => node.id === branchNode.id)).not.toHaveProperty("status");
   });
 
   it("stores an optional planned completion date on a new plan milestone", () => {

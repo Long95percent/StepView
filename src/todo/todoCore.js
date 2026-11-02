@@ -17,6 +17,29 @@ export const TODO_STATUS = {
   completed: "completed",
 };
 
+const NODE_TYPE_LABELS = {
+  plan: "计划节点",
+  branch: "分支节点",
+  milestone: "普通节点",
+};
+
+/** Plan milestones, regular milestones and branch steps can all be completed. */
+export function getNodeType(node) {
+  if (!node || typeof node !== "object") return null;
+  if (node.branchId) return "branch";
+  if (node.kind === "plan-milestone") return "plan";
+  if (node.kind === "milestone") return "milestone";
+  return null;
+}
+
+export function getNodeTypeLabel(node) {
+  return NODE_TYPE_LABELS[getNodeType(node)] || "";
+}
+
+export function isCompletableNode(node) {
+  return getNodeType(node) !== null;
+}
+
 function pad(value, length = 2) {
   return String(value).padStart(length, "0");
 }
@@ -284,7 +307,7 @@ export function getPlannedNodesForDay(board, dayKey) {
   for (const task of board?.tasks || []) {
     for (const node of task.nodes || []) {
       if (node?.plannedFor !== date || !node.id) continue;
-      const completed = node.kind === "plan-milestone" && node.status === "completed";
+      const completed = node.status === "completed";
       entries.push({
         source: "node",
         id: node.id,
@@ -295,7 +318,9 @@ export function getPlannedNodesForDay(board, dayKey) {
         createdAt: String(node.timestamp || ""),
         updatedAt: null,
         completedAt: completed ? String(node.completedAt || "") : null,
-        canComplete: node.kind === "plan-milestone",
+        canComplete: isCompletableNode(node),
+        nodeType: getNodeType(node),
+        nodeTypeLabel: getNodeTypeLabel(node),
         node,
         taskId: task.id,
         taskTitle: String(task.title || ""),

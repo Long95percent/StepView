@@ -32,7 +32,7 @@ import {
   normalizeBoard,
   restoreTask,
   toggleKeyNode,
-  togglePlanMilestoneComplete,
+  toggleNodeComplete,
   unlockBoardAchievements,
 } from "./progressCore";
 import { buildAgentMemory } from "./agentMemory";
@@ -49,7 +49,15 @@ import { DayDiaryPopover } from "./diary/dayDiaryPopover";
 import { DiariesView } from "./diary/diariesView";
 import { collectNodeOptions } from "./diary/diaryViewCore";
 import { NodeDiarySection } from "./diary/nodeDiarySection";
-import { ensureTodoStartedOn, formatTodoDateShort, setNodePlannedFor, toLocalDateKey } from "./todo/todoCore";
+import {
+  ensureTodoStartedOn,
+  formatTodoDateShort,
+  getNodeType,
+  getNodeTypeLabel,
+  isCompletableNode,
+  setNodePlannedFor,
+  toLocalDateKey,
+} from "./todo/todoCore";
 import { TodosView } from "./todo/todosView";
 import "./styles.css";
 
@@ -890,8 +898,8 @@ function App() {
     celebrateAt({ x: node.x, y: node.y });
   };
 
-  const completePlanMilestone = (task, node) => {
-    updateTask(task.id, (currentTask) => togglePlanMilestoneComplete(currentTask, node.id, new Date()));
+  const completeNode = (task, node) => {
+    updateTask(task.id, (currentTask) => toggleNodeComplete(currentTask, node.id, new Date()));
     if (node.status !== "completed") celebrateAt({ x: node.x, y: node.y });
   };
 
@@ -1282,7 +1290,15 @@ function App() {
                   </div>
                   <strong className="nodeTitle">{node.isKeyNode && <span className="keyBadge">★</span>}{node.title}</strong>
                   <time>{formatCompactDate(node.timestamp)}</time>
-                  {node.plannedFor && <span className="nodePlanBadge">计划 {formatTodoDateShort(node.plannedFor)}</span>}
+                  {(isCompletableNode(node) || node.plannedFor || node.status === "completed") && (
+                    <div className="nodeBadges">
+                      {isCompletableNode(node) && (
+                        <span className={`nodeTypeBadge ${getNodeType(node)}`}>{getNodeTypeLabel(node)}</span>
+                      )}
+                      {node.status === "completed" && <span className="nodeDoneBadge">✓ 已完成</span>}
+                      {node.plannedFor && <span className="nodePlanBadge">计划 {formatTodoDateShort(node.plannedFor)}</span>}
+                    </div>
+                  )}
                   {selectedNodeId === node.id && (
                     <div className="nodePlanEditor" onPointerDown={(event) => event.stopPropagation()}>
                       <label>计划完成日期<input type="date" value={node.plannedFor || ""} onChange={(event) => updateNodePlannedFor(node.id, event.target.value)} /></label>
@@ -1313,14 +1329,9 @@ function App() {
                       </button>
                     </div>
                   )}
-                  {selectedNodeId === node.id && node.kind === "milestone" && (
-                    <button className="danger" onClick={(event) => { event.stopPropagation(); deleteNodeFromBoard(task.id, node); }}>
-                      Delete 🗑️
-                    </button>
-                  )}
-                  {selectedNodeId === node.id && node.kind === "plan-milestone" && (
+                  {selectedNodeId === node.id && isCompletableNode(node) && (
                     <div className="nodeActions">
-                      <button className="done" onClick={(event) => { event.stopPropagation(); completePlanMilestone(task, node); }}>
+                      <button className="done" onClick={(event) => { event.stopPropagation(); completeNode(task, node); }}>
                         {node.status === "completed" ? "Undo ↩️" : "Complete ✅"}
                       </button>
                       <button className="danger" onClick={(event) => { event.stopPropagation(); deleteNodeFromBoard(task.id, node); }}>

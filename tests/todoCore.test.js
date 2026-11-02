@@ -204,4 +204,52 @@ describe("node plans and the Todo view", () => {
       completedAt: "2026-10-25T09:00:00Z",
     });
   });
+
+  it("projects branch and regular milestones as completable with distinct labels", () => {
+    const branchNode = {
+      id: "branch-step-1",
+      branchId: "branch-1",
+      kind: "milestone",
+      title: "分支练习",
+      plannedFor: "2026-10-25",
+      status: "completed",
+      completedAt: "2026-10-25T10:00:00Z",
+      timestamp: "2026-10-20T09:00:00.000Z",
+    };
+    const regularNode = {
+      id: "milestone-1",
+      kind: "milestone",
+      title: "普通事项",
+      plannedFor: "2026-10-25",
+      timestamp: "2026-10-20T10:00:00.000Z",
+    };
+    const board = {
+      tasks: [{
+        id: "task-1",
+        title: "节点类型",
+        status: "active",
+        nodes: [branchNode, regularNode],
+        edges: [],
+      }],
+      todos: [],
+    };
+    const entries = getPlannedNodesForDay(board, "2026-10-25");
+
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "branch-step-1",
+        canComplete: true,
+        nodeType: "branch",
+        nodeTypeLabel: "分支节点",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        id: "milestone-1",
+        canComplete: true,
+        nodeType: "milestone",
+        nodeTypeLabel: "普通节点",
+        status: "open",
+      }),
+    ]));
+  });
 });

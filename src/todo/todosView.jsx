@@ -1,5 +1,5 @@
 import React from "react";
-import { togglePlanMilestoneComplete } from "../progressCore";
+import { toggleNodeComplete } from "../progressCore";
 import {
   addTodo,
   deleteTodo,
@@ -48,7 +48,7 @@ function TodoEditor({ editor, onCancel, onSave }) {
   );
 }
 
-function TodoItem({ entry, onEdit, onDelete, onToggle, onTogglePlan, onOpenNode }) {
+function TodoItem({ entry, onEdit, onDelete, onToggle, onToggleNode, onOpenNode }) {
   const completed = entry.status === "completed";
   const isNodePlan = entry.source === "node";
   return (
@@ -62,7 +62,7 @@ function TodoItem({ entry, onEdit, onDelete, onToggle, onTogglePlan, onOpenNode 
             className={`todoCheck ${completed ? "checked" : ""}`}
             aria-label={completed ? "标记为未完成" : "标记为完成"}
             aria-pressed={completed}
-            onClick={() => (isNodePlan ? onTogglePlan(entry.id) : onToggle(entry.id, !completed))}
+            onClick={() => (isNodePlan ? onToggleNode(entry.id) : onToggle(entry.id, !completed))}
           >
             {completed ? "✓" : ""}
           </button>
@@ -72,7 +72,7 @@ function TodoItem({ entry, onEdit, onDelete, onToggle, onTogglePlan, onOpenNode 
           {entry.detail && <p>{entry.detail}</p>}
           {isNodePlan && (
             <div className="todoItemMeta">
-              <span className="todoSourceBadge">来自节点</span>
+              <span className={`todoSourceBadge ${entry.nodeType}`}>来自{entry.nodeTypeLabel}</span>
               <span>{entry.taskTitle}{entry.taskStatus === "completed" ? " · 目标已完成" : ""}</span>
             </div>
           )}
@@ -150,12 +150,12 @@ export function TodosView({ board, onUpdateBoard, onOpenNode, onToast, onStartTo
     report(() => onUpdateBoard((current) => setTodoCompleted(current, todoId, completed, new Date())));
   }
 
-  function togglePlan(nodeId) {
+  function toggleNode(nodeId) {
     report(() => onUpdateBoard((current) => ({
       ...current,
       tasks: current.tasks.map((task) => (
         task.nodes.some((node) => node.id === nodeId)
-          ? togglePlanMilestoneComplete(task, nodeId, new Date())
+          ? toggleNodeComplete(task, nodeId, new Date())
           : task
       )),
     })));
@@ -173,7 +173,7 @@ export function TodosView({ board, onUpdateBoard, onOpenNode, onToast, onStartTo
     onEdit: (entry) => setEditor({ todo: entry, date: entry.date }),
     onDelete: removeTodo,
     onToggle: toggleTodo,
-    onTogglePlan: togglePlan,
+    onToggleNode: toggleNode,
     onOpenNode,
   };
 

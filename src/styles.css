@@ -673,6 +673,15 @@ button { cursor: pointer; }
 .node.plan-milestone.completed.keyNode {
   box-shadow: 0 24px 58px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 212, 77, .45), 0 0 70px rgba(196, 142, 255, .28), inset 0 1px rgba(255,255,255,.22);
 }
+.node.milestone.completed,
+.node.branchNode.completed {
+  border-color: rgba(105, 238, 255, .46);
+  background: linear-gradient(145deg, rgba(31, 67, 91, .92), rgba(18, 28, 58, .9));
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 24px rgba(78, 225, 255, .16), inset 0 1px rgba(255,255,255,.16);
+}
+.node.branchNode.completed {
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 26px rgba(124, 92, 255, .2), 0 0 20px rgba(78, 225, 255, .12), inset 0 1px rgba(255,255,255,.16);
+}
 .node.selected { z-index: 3; outline: 3px solid rgba(0, 213, 255, .22); }
 .node.linkSource { outline: 3px solid rgba(196, 142, 255, .38); }
 .node.linkTarget { box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 30px rgba(196, 142, 255, .2), inset 0 1px rgba(255,255,255,.12); }
@@ -715,15 +724,45 @@ button { cursor: pointer; }
 .node strong { display: block; line-height: 1.25; }
 .keyBadge { margin-right: 6px; color: #ffe681; text-shadow: 0 0 12px rgba(255, 214, 74, .8); }
 .node time { display: block; margin-top: 5px; font-size: 12px; }
+.nodeBadges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+.nodeTypeBadge,
+.nodeDoneBadge,
 .nodePlanBadge {
   display: inline-flex;
-  margin-top: 7px;
   padding: 3px 8px;
-  border: 1px solid rgba(128, 247, 255, .28);
   border-radius: 999px;
-  color: #a8edff;
   font-size: 10.5px;
   font-weight: 750;
+}
+.nodeTypeBadge.plan {
+  border: 1px solid rgba(196, 142, 255, .34);
+  color: #dec4ff;
+  background: rgba(159, 103, 255, .14);
+}
+.nodeTypeBadge.branch {
+  border: 1px solid rgba(151, 138, 255, .34);
+  color: #d5ceff;
+  background: rgba(124, 92, 255, .16);
+}
+.nodeTypeBadge.milestone {
+  border: 1px solid rgba(160, 184, 211, .26);
+  color: #c2d1e5;
+  background: rgba(160, 184, 211, .09);
+}
+.nodeDoneBadge {
+  border: 1px solid rgba(105, 238, 255, .32);
+  color: #bff9ff;
+  background: rgba(0, 206, 255, .12);
+}
+.nodePlanBadge {
+  border: 1px solid rgba(128, 247, 255, .28);
+  color: #a8edff;
   background: rgba(0, 190, 255, .1);
 }
 .nodePlanEditor {
@@ -2159,6 +2198,9 @@ button.diaryNodeTag:hover { color: #e6f6ff; background: rgba(0, 170, 255, .22); 
 .todoItemCopy p { display: -webkit-box; overflow: hidden; margin: 0; color: #9eb1cf; font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .todoItemMeta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 1px; color: #8096b7; font-size: 9px; line-height: 1.4; }
 .todoSourceBadge { padding: 1px 5px; border: 1px solid rgba(128, 211, 255, .2); border-radius: 999px; color: #a8ddff; background: rgba(0, 170, 255, .1); }
+.todoSourceBadge.plan { border-color: rgba(196, 142, 255, .24); color: #dec4ff; background: rgba(159, 103, 255, .1); }
+.todoSourceBadge.branch { border-color: rgba(151, 138, 255, .24); color: #d5ceff; background: rgba(124, 92, 255, .12); }
+.todoSourceBadge.milestone { border-color: rgba(160, 184, 211, .2); color: #c2d1e5; background: rgba(160, 184, 211, .07); }
 .todoItemActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .todoItemActions .ghost, .todoItemActions .danger { width: auto; margin: 0; padding: 4px 7px; font-size: 9.5px; }
 .todoItemActions .danger { color: #ffb4c2; background: rgba(255, 84, 116, .12); }

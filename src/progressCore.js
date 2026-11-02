@@ -1,4 +1,4 @@
-import { normalizeDateKey, normalizeTodoStartedOn, normalizeTodos } from "./todo/todoCore.js";
+import { isCompletableNode, normalizeDateKey, normalizeTodoStartedOn, normalizeTodos } from "./todo/todoCore.js";
 
 const HORIZONTAL_GAP = 280;
 const BRANCH_GAP_X = 220;
@@ -674,19 +674,24 @@ export function addPlanMilestoneAfter(task, sourceNodeId, note) {
   return addNodeAfter(task, sourceNodeId, planMilestone);
 }
 
-export function togglePlanMilestoneComplete(task, nodeId, now = new Date()) {
+export function toggleNodeComplete(task, nodeId, now = new Date()) {
   return {
     ...task,
     nodes: task.nodes.map((node) => {
-      if (node.id !== nodeId || node.kind !== "plan-milestone") return node;
+      if (node.id !== nodeId || !isCompletableNode(node)) return node;
       if (node.status === "completed") {
-        const { completedAt, ...plannedNode } = node;
-        return { ...plannedNode, status: "planned" };
+        const { completedAt, status: _status, ...plannedNode } = node;
+        return node.kind === "plan-milestone"
+          ? { ...plannedNode, status: "planned" }
+          : plannedNode;
       }
       return { ...node, status: "completed", completedAt: now.toISOString() };
     }),
   };
 }
+
+/** Kept as an alias for callers that still use the original plan-specific name. */
+export const togglePlanMilestoneComplete = toggleNodeComplete;
 
 export function createEmojiSticker(emoji, position) {
   return { id: makeId("emoji"), emoji, x: position.x, y: position.y };

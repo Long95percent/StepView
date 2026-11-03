@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  addBranch,
+  addBranchMilestoneAfter,
+  buildTask,
+  normalizeBoard,
+} from "../src/progressCore";
+import {
   addDaysToDateKey,
   addTodo,
   daysBetweenDateKeys,
@@ -251,5 +257,62 @@ describe("node plans and the Todo view", () => {
         status: "open",
       }),
     ]));
+  });
+
+  it("projects a branch plan as a plan node on its scheduled date", () => {
+    const branchPlan = {
+      id: "branch-plan-1",
+      branchId: "branch-1",
+      kind: "plan-milestone",
+      status: "planned",
+      title: "分支计划事项",
+      plannedFor: "2026-10-25",
+      timestamp: "2026-10-20T09:00:00.000Z",
+    };
+    const board = {
+      tasks: [{
+        id: "task-1",
+        title: "分支计划",
+        status: "active",
+        nodes: [branchPlan],
+        edges: [],
+      }],
+      todos: [],
+    };
+
+    expect(getPlannedNodesForDay(board, "2026-10-25")).toEqual([
+      expect.objectContaining({
+        id: "branch-plan-1",
+        date: "2026-10-25",
+        canComplete: true,
+        nodeType: "plan",
+        nodeTypeLabel: "计划节点",
+        status: "open",
+      }),
+    ]);
+  });
+
+  it("carries a newly created branch plan into Todo on its planned date", () => {
+    const task = buildTask("雅思复习", { x: 700, y: 300 }, new Date("2026-10-20T09:00:00Z"));
+    let board = normalizeBoard({ tasks: [task], stickers: [], todos: [], todoStartedOn: "2026-10-21" });
+    board = addBranch(board, task.nodes[0].id, { type: "self", label: "听力计划" });
+    const branch = board.branches[0];
+    board = addBranchMilestoneAfter(board, branch.id, branch.toNodeId, {
+      kind: "plan-milestone",
+      title: "完成 C20 Test 3",
+      plannedFor: "2026-10-25",
+      timestamp: "2026-10-21T09:00:00.000Z",
+    });
+
+    expect(getTodoEntriesForDay(board, "2026-10-25")).toEqual([
+      expect.objectContaining({
+        title: "完成 C20 Test 3",
+        source: "node",
+        date: "2026-10-25",
+        nodeType: "plan",
+        nodeTypeLabel: "计划节点",
+        status: "open",
+      }),
+    ]);
   });
 });

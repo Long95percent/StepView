@@ -493,6 +493,7 @@ export function addBranchMilestoneAfter(board, branchId, sourceNodeId, note) {
   const sourceNode = findNodeInBoard(normalized, sourceNodeId);
   if (!branch || !sourceNode) throw new Error("Branch node not found.");
   const typeConfig = BRANCH_TYPES[branch.type] || BRANCH_TYPES.self;
+  const isPlan = note.kind === "plan-milestone";
   const nodeId = makeId("node");
   const timestamp = note.timestamp ? new Date(note.timestamp).toISOString() : new Date().toISOString();
   const plannedFor = normalizeDateKey(note.plannedFor);
@@ -501,9 +502,10 @@ export function addBranchMilestoneAfter(board, branchId, sourceNodeId, note) {
     taskId: branch.taskId,
     branchId,
     previousBranchNodeId: sourceNodeId,
-    kind: "milestone",
-    emoji: typeConfig.emoji,
-    title: note.title?.trim() || "Branch step",
+    kind: isPlan ? "plan-milestone" : "milestone",
+    ...(isPlan ? { status: "planned" } : {}),
+    emoji: isPlan ? ICONS.planMilestone : typeConfig.emoji,
+    title: note.title?.trim() || (isPlan ? "New plan" : "Branch step"),
     detail: note.detail || "",
     timestamp,
     ...(plannedFor ? { plannedFor } : {}),

@@ -280,6 +280,30 @@ describe("progress board core", () => {
     expect(getBranchSegments(extended).every((segment) => segment.type === "partner")).toBe(true);
   });
 
+  it("keeps plan milestones on a branch as plan nodes with their scheduled date", () => {
+    const task = buildTask("分支计划", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
+    const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {
+      type: "self",
+      label: "复习计划",
+    });
+    const branch = board.branches[0];
+
+    const extended = addBranchMilestoneAfter(board, branch.id, branch.toNodeId, {
+      kind: "plan-milestone",
+      title: "完成第二套题",
+      plannedFor: "2026-05-25",
+      timestamp: "2026-05-20T10:00:00.000Z",
+    });
+
+    expect(extended.tasks[0].nodes.at(-1)).toMatchObject({
+      branchId: branch.id,
+      kind: "plan-milestone",
+      status: "planned",
+      plannedFor: "2026-05-25",
+      title: "完成第二套题",
+    });
+  });
+
   it("keeps branch lines visible when deleting a middle branch node", () => {
     const task = buildTask("删除中间支线节点", { x: 700, y: 300 }, new Date("2026-05-18T09:30:00Z"));
     const board = addBranch(normalizeBoard({ tasks: [task], stickers: [] }), task.nodes[0].id, {

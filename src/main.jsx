@@ -589,6 +589,7 @@ function App() {
         detail: noteDraft.detail,
         timestamp: new Date(noteDraft.timestamp).toISOString(),
         plannedFor: noteDraft.plannedFor,
+        kind: noteDraft.kind,
       }));
       setNoteDraft(null);
       return;

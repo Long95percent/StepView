@@ -648,7 +648,7 @@ button { cursor: pointer; }
   transform: translate(-50%, -50%);
   backdrop-filter: blur(18px);
 }
-.node.branchNode { box-shadow: 0 16px 44px rgba(124, 92, 255, .2), inset 0 0 0 1px rgba(255,255,255,.12); }
+.node.branchNode:not(.plan-milestone) { box-shadow: 0 16px 44px rgba(124, 92, 255, .2), inset 0 0 0 1px rgba(255,255,255,.12); }
 .node.finish { border-color: rgba(255, 219, 92, .52); }
 .node.start { border-color: rgba(76, 255, 199, .45); }
 .node.keyNode {
@@ -674,12 +674,12 @@ button { cursor: pointer; }
   box-shadow: 0 24px 58px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 212, 77, .45), 0 0 70px rgba(196, 142, 255, .28), inset 0 1px rgba(255,255,255,.22);
 }
 .node.milestone.completed,
-.node.branchNode.completed {
+.node.branchNode.completed:not(.plan-milestone) {
   border-color: rgba(105, 238, 255, .46);
   background: linear-gradient(145deg, rgba(31, 67, 91, .92), rgba(18, 28, 58, .9));
   box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 24px rgba(78, 225, 255, .16), inset 0 1px rgba(255,255,255,.16);
 }
-.node.branchNode.completed {
+.node.branchNode.completed:not(.plan-milestone) {
   box-shadow: 0 22px 50px rgba(0, 0, 0, .32), 0 0 26px rgba(124, 92, 255, .2), 0 0 20px rgba(78, 225, 255, .12), inset 0 1px rgba(255,255,255,.16);
 }
 .node.selected { z-index: 3; outline: 3px solid rgba(0, 213, 255, .22); }

@@ -13,6 +13,7 @@ import {
   ensureTodoStartedOn,
   formatTodoDateShort,
   getPlannedNodesForDay,
+  getNodeType,
   getTodoEntriesForDay,
   getTodoMemoryGroups,
   getTodoWeek,
@@ -211,13 +212,12 @@ describe("node plans and the Todo view", () => {
     });
   });
 
-  it("projects branch and regular milestones as completable with distinct labels", () => {
+  it("keeps unscheduled branches distinct and projects regular milestones as completable", () => {
     const branchNode = {
       id: "branch-step-1",
       branchId: "branch-1",
       kind: "milestone",
       title: "分支练习",
-      plannedFor: "2026-10-25",
       status: "completed",
       completedAt: "2026-10-25T10:00:00Z",
       timestamp: "2026-10-20T09:00:00.000Z",
@@ -241,14 +241,8 @@ describe("node plans and the Todo view", () => {
     };
     const entries = getPlannedNodesForDay(board, "2026-10-25");
 
-    expect(entries).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: "branch-step-1",
-        canComplete: true,
-        nodeType: "branch",
-        nodeTypeLabel: "分支节点",
-        status: "completed",
-      }),
+    expect(getNodeType(branchNode)).toBe("branch");
+    expect(entries).toEqual([
       expect.objectContaining({
         id: "milestone-1",
         canComplete: true,
@@ -256,7 +250,7 @@ describe("node plans and the Todo view", () => {
         nodeTypeLabel: "普通节点",
         status: "open",
       }),
-    ]));
+    ]);
   });
 
   it("projects a branch plan as a plan node on its scheduled date", () => {
@@ -288,6 +282,26 @@ describe("node plans and the Todo view", () => {
         nodeType: "plan",
         nodeTypeLabel: "计划节点",
         status: "open",
+      }),
+    ]);
+  });
+
+  it("treats a scheduled branch node as a plan for legacy board compatibility", () => {
+    const legacyBranchTodo = {
+      id: "legacy-branch-todo-1",
+      branchId: "branch-1",
+      kind: "milestone",
+      title: "历史分支计划",
+      plannedFor: "2026-10-25",
+      timestamp: "2026-10-20T09:00:00.000Z",
+    };
+    const board = { tasks: [taskWithNode(legacyBranchTodo)], todos: [] };
+
+    expect(getPlannedNodesForDay(board, "2026-10-25")).toEqual([
+      expect.objectContaining({
+        id: "legacy-branch-todo-1",
+        nodeType: "plan",
+        nodeTypeLabel: "计划节点",
       }),
     ]);
   });

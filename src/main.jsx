@@ -1243,7 +1243,7 @@ function App() {
               {task.nodes.map((node) => (
                 <article
                   key={node.id}
-                  className={`node ${node.kind} ${node.branchId ? "branchNode" : ""} ${node.isKeyNode ? "keyNode" : ""} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${branchLinkDrag && !node.branchId ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
+                  className={`node ${getNodeType(node) === "plan" ? "plan-milestone" : node.kind} ${node.branchId ? "branchNode" : ""} ${node.isKeyNode ? "keyNode" : ""} ${node.status === "completed" ? "completed" : ""} ${linkDrag?.nodeId === node.id ? "linkSource" : ""} ${linkDrag && linkDrag.taskId !== task.id ? "linkTarget" : ""} ${branchLinkDrag && !node.branchId ? "linkTarget" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
                   style={{ left: node.x, top: node.y }}
                   onPointerDown={(event) => startPointerDrag(event, "node", node.id)}
                   onDoubleClick={(event) => {

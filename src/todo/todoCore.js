@@ -26,7 +26,7 @@ const NODE_TYPE_LABELS = {
 /** Plan milestones, regular milestones and branch steps can all be completed. */
 export function getNodeType(node) {
   if (!node || typeof node !== "object") return null;
-  if (node.kind === "plan-milestone") return "plan";
+  if (node.kind === "plan-milestone" || (node.branchId && node.plannedFor)) return "plan";
   if (node.branchId) return "branch";
   if (node.kind === "milestone") return "milestone";
   return null;

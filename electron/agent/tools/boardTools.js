@@ -20,6 +20,39 @@ const CHANGE_FIELDS = {
   y: { type: "number" },
 };
 
+const NODE_DETAIL_LIMIT = 300;
+
+function compactText(value, maxLength = NODE_DETAIL_LIMIT) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function compactNode(node, taskId) {
+  return {
+    id: node.id,
+    taskId,
+    branchId: node.branchId || null,
+    kind: node.kind,
+    title: node.title,
+    detail: compactText(node.detail),
+    status: node.status || null,
+    plannedFor: node.plannedFor || null,
+    timestamp: node.timestamp || null,
+    isKeyNode: Boolean(node.isKeyNode),
+  };
+}
+
+function compactTaskOverview(board, task) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status || "active",
+    nodeCount: Array.isArray(task.nodes) ? task.nodes.length : 0,
+    planCount: Array.isArray(task.nodes) ? task.nodes.filter((node) => node.kind === "plan-milestone").length : 0,
+    branchCount: (board.branches || []).filter((branch) => branch.taskId === task.id).length,
+  };
+}
+
 function readBoardFrom(context, toolId) {
   requireToolContext(context, ["boardStorage"], toolId);
   return context.boardStorage.readBoard();
@@ -29,12 +62,54 @@ export const boardTools = [
   defineTool({
     id: "board.get_current_state",
     title: "Get current board",
-    description: "Read the user's whole board: task lines, nodes, stickers, branches and links.",
+    description:
+      "Read a compact overview of the whole board, plus full node IDs and key fields for one task line. "
+      + "The current session's task line is selected by default; pass taskId to inspect another task line. "
+      + "Use board.search when you need to match details across task lines.",
     category: "board",
     risk: "read",
     scopes: ["board:read"],
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
-    execute: async (_input, context) => readBoardFrom(context, "board.get_current_state"),
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        taskId: { type: "string", maxLength: 120, description: "Optional task line to inspect. Defaults to the current session's task line." },
+      },
+    },
+    execute: async (input = {}, context) => {
+      const board = await readBoardFrom(context, "board.get_current_state");
+      const tasks = Array.isArray(board.tasks) ? board.tasks : [];
+      const requestedTaskId = String(input.taskId || context.taskLineId || "").trim();
+      const selectedTask = tasks.find((task) => task.id === requestedTaskId) || null;
+      const branches = (board.branches || []).filter((branch) => branch.taskId === selectedTask?.id);
+
+      return {
+        summary: {
+          taskCount: tasks.length,
+          nodeCount: tasks.reduce((sum, task) => sum + (Array.isArray(task.nodes) ? task.nodes.length : 0), 0),
+          stickerCount: (board.stickers || []).length,
+          branchCount: (board.branches || []).length,
+          linkCount: (board.links || []).length,
+        },
+        tasks: tasks.map((task) => compactTaskOverview(board, task)),
+        selectedTaskId: selectedTask?.id || null,
+        selectedTask: selectedTask ? {
+          id: selectedTask.id,
+          title: selectedTask.title,
+          status: selectedTask.status || "active",
+          nodes: (selectedTask.nodes || []).map((node) => compactNode(node, selectedTask.id)),
+        } : null,
+        stickers: (board.stickers || []).map(({ id, emoji, x, y }) => ({ id, emoji, x, y })),
+        branches: branches.map((branch) => ({
+          id: branch.id,
+          taskId: branch.taskId,
+          type: branch.type || null,
+          label: branch.label || null,
+          partnerName: branch.partnerName || null,
+          mergeToNodeId: branch.mergeToNodeId || null,
+        })),
+      };
+    },
   }),
 
   defineTool({

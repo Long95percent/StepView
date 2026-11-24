@@ -315,6 +315,7 @@ Renderer 或模型请求工具
 
 审计写入失败不会影响工具结果：`toolRuntime` 会吞掉 audit sink 的异常并记日志。
 超时通过 `AbortController` 真正中断等待，而不是仅仅标记状态。
+工具结果受 100KB 输出预算约束。`board.get_current_state` 因此返回“全画布概览 + 当前任务线完整节点”，而不是整块原始 Board；需要跨任务线搜索时使用 `board.search`。
 
 ## 4. 记忆系统分层
 

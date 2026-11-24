@@ -1,7 +1,15 @@
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-5.1";
-const REQUEST_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 const MAX_TOOL_ROUNDS = 6;
+
+function isTimeoutError(error) {
+  return error?.name === "TimeoutError" || error?.name === "AbortError" || error?.cause?.code === "UND_ERR_CONNECT_TIMEOUT";
+}
+
+function modelTimeoutError() {
+  return new Error(`模型响应超时（${Math.round(REQUEST_TIMEOUT_MS / 1000)} 秒），请重试。`);
+}
 
 function chatCompletionsUrl(baseUrl) {
   return `${String(baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, "")}/chat/completions`;
@@ -29,6 +37,7 @@ async function streamRound({ normalizedApiKey, requestUrl, selectedModel, messag
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
+    if (isTimeoutError(error)) throw modelTimeoutError();
     const cause = error?.cause;
     const reason = cause?.code || cause?.message || error?.message || "unknown network error";
     const host = new URL(requestUrl).host;
@@ -62,13 +71,18 @@ async function streamRound({ normalizedApiKey, requestUrl, selectedModel, messag
     }
   }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() || "";
-    for (const block of blocks) consume(block);
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+      for (const block of blocks) consume(block);
+      if (done) break;
+    }
+  } catch (error) {
+    if (isTimeoutError(error)) throw modelTimeoutError();
+    throw error;
   }
   if (buffer.trim()) consume(buffer);
 

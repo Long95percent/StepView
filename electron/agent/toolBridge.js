@@ -1,8 +1,12 @@
 export function createToolContext(context, sessionId, extra = {}) {
+  const inferredTaskLineId = typeof sessionId === "string" && sessionId.startsWith("task:")
+    ? sessionId.slice("task:".length)
+    : null;
   return {
     accountId: context.accountId,
     agentId: "user",
     sessionId,
+    taskLineId: inferredTaskLineId,
     boardStorage: context.boardStorage,
     boardChangeStore: context.boardChangeStore,
     diaryService: context.diaryService,

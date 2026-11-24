@@ -31,4 +31,13 @@ describe("OpenAI stream parser", () => {
       fetchApi: async () => { throw failure; },
     })).rejects.toThrow("无法连接模型服务 relay.example：ECONNREFUSED");
   });
+
+  it("reports model timeouts with a readable retry message", async () => {
+    const failure = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    await expect(streamOpenAIChat({
+      apiKey: "test-key",
+      messages: [],
+      fetchApi: async () => { throw failure; },
+    })).rejects.toThrow("模型响应超时（120 秒），请重试。");
+  });
 });

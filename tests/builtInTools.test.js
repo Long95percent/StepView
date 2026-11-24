@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createToolRegistry } from "../electron/agent/toolRegistry.js";
 import { registerBuiltInTools } from "../electron/agent/builtInTools.js";
 import { createToolRuntime } from "../electron/agent/toolRuntime.js";
+import { createToolContext } from "../electron/agent/toolBridge.js";
 import { createBoardStorage } from "../electron/boardStorage.js";
 import { createBoardChangeStore } from "../electron/agent/boardChangeStore.js";
 import { openAccountDatabase } from "../electron/db/index.js";
@@ -119,5 +120,46 @@ describe("built-in tools", () => {
     const registry = makeRegistry();
     const runtime = createToolRuntime({ registry });
     await expect(runtime.run("board.get_current_state", {}, { accountId: "a" })).rejects.toThrow('missing required context: context.boardStorage');
+  });
+
+  it("returns a compact board overview and the current task line's nodes", async () => {
+    const registry = makeRegistry();
+    const runtime = createToolRuntime({ registry });
+    const context = await makeBoardContext();
+    const task = (await context.boardStorage.readBoard()).tasks[0];
+
+    const { result } = await runtime.run("board.get_current_state", {}, createToolContext(context, `task:${task.id}`));
+
+    expect(result.selectedTaskId).toBe(task.id);
+    expect(result.selectedTask.nodes.map((node) => node.id)).toEqual(task.nodes.map((node) => node.id));
+    expect(result.tasks).toEqual([expect.objectContaining({ id: task.id, nodeCount: task.nodes.length, planCount: 0, branchCount: 0 })]);
+    expect(result.summary).toMatchObject({ taskCount: 1, nodeCount: task.nodes.length, stickerCount: 0, branchCount: 0 });
+  });
+
+  it("keeps current-state output bounded when other task lines are large", async () => {
+    const registry = makeRegistry();
+    const runtime = createToolRuntime({ registry });
+    const context = await makeBoardContext();
+    const task = (await context.boardStorage.readBoard()).tasks[0];
+    const otherTask = buildTask("大型任务线", { x: 8, y: 9 }, NOW);
+    otherTask.nodes = Array.from({ length: 400 }, (_, index) => ({
+      id: `node-large-${index}`,
+      taskId: otherTask.id,
+      kind: "plan-milestone",
+      title: `大型节点 ${index}`,
+      detail: "很长的节点详情".repeat(100),
+      timestamp: NOW.toISOString(),
+      x: index,
+      y: index,
+    }));
+    await context.boardStorage.writeBoard(normalizeBoard({ tasks: [task, otherTask] }));
+
+    const { result } = await runtime.run("board.get_current_state", {}, createToolContext(context, `task:${task.id}`));
+
+    expect(result.selectedTaskId).toBe(task.id);
+    expect(result.selectedTask.nodes).toHaveLength(task.nodes.length);
+    expect(result.tasks.find((candidate) => candidate.id === otherTask.id)).toMatchObject({ nodeCount: 400 });
+    expect(result.tasks.find((candidate) => candidate.id === otherTask.id).nodes).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(100_000);
   });
 });

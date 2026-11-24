@@ -500,13 +500,15 @@ flowchart LR
     REVIEW -->|保留| COMMIT[boardChangeExecutor.commit]
     REVIEW -->|丢弃| DISCARD[boardChangeExecutor.discard]
     COMMIT --> HASH{baseHash 与当前 Board 一致?}
-    HASH -->|否| CONFLICT[BOARD_CHANGE_CONFLICT，要求重新生成]
-    HASH -->|是| WRITE[snapshotBoard + boardStorage.writeBoard]
+    HASH -->|否| REBASE[三方合并提案改动到当前 Board]
+    REBASE -->|同一字段冲突| CONFLICT[BOARD_CHANGE_CONFLICT，要求重新生成]
+    REBASE -->|可安全合并| WRITE[snapshotBoard + boardStorage.writeBoard]
+    HASH -->|是| WRITE
 ```
 
 - 支持的操作是受控枚举（`task.*` / `node.*` / `sticker.*`），全部复用 `src/progressCore.js` 的既有函数，保证 Agent 写入与 UI 写入的结构完全一致。
 - 提案存在账号库的 `approvals` / `snapshots` 表里，内含原始 Board 备份、候选 Board、`baseHash` 和 diff。以前是一个提案一个 JSON 文件、列个表要扫目录，现在一次查询就够。
-- 审批通过时 `boardChangeExecutor` 会重新读取当前 Board 并比对 `baseHash`。不一致说明期间有别的写入，直接拒绝，不会覆盖用户的新数据。
+- 审批通过时 `boardChangeExecutor` 会重新读取当前 Board 并比对 `baseHash`。不一致时以提案的 `before` / `after` 和当前 Board 做三方合并：无关改动会自动保留，同一字段的不同修改才会报 `BOARD_CHANGE_CONFLICT`，不会覆盖用户的新数据。
 - 落盘前的快照写进 `snapshots` 表；画布镜像 `stepview-board.json` 由数据库层维护，`boardStorage` 自身滚动更新镜像的上一版。
 - 待确认提案落库，重启后依然会出现在审批列表里，不会因为进程退出而丢失或多写。
 - 同一套审批队列还承载记忆提案和日记提案（`diary_change`）。Agent 想写日记也只能生成提案，用户批准后才落库。

@@ -64,6 +64,41 @@ describe("board change executor", () => {
     expect(changeStore.listSnapshots()).toHaveLength(1);
   });
 
+  it("rebases a safe proposal onto unrelated board changes", async () => {
+    const { boardStorage, executor, propose } = await setup();
+    const current = await boardStorage.readBoard();
+    const task = current.tasks[0];
+    const proposalId = await propose({ operation: "task.rename", taskId: task.id, title: "考研数学" });
+
+    await boardStorage.writeBoard(normalizeBoard({
+      ...current,
+      stickers: [{ id: "emoji-test", emoji: "✨", x: 10, y: 20 }],
+    }));
+
+    await executor.commit(proposalId, { accountId: "account-a" });
+
+    const applied = await boardStorage.readBoard();
+    expect(applied.tasks[0].title).toBe("考研数学");
+    expect(applied.stickers).toEqual([{ id: "emoji-test", emoji: "✨", x: 10, y: 20 }]);
+  });
+
+  it("applies multiple proposals created from the same board baseline", async () => {
+    const { boardStorage, executor, propose } = await setup();
+    const current = await boardStorage.readBoard();
+    const task = current.tasks[0];
+    const sourceNodeId = task.nodes[0].id;
+    const firstProposal = await propose({ operation: "node.add_milestone", taskId: task.id, sourceNodeId, title: "第一步" });
+    const secondProposal = await propose({ operation: "node.add_milestone", taskId: task.id, sourceNodeId, title: "第二步" });
+
+    await executor.commit(firstProposal, { accountId: "account-a" });
+    await executor.commit(secondProposal, { accountId: "account-a" });
+
+    const applied = await boardStorage.readBoard();
+    const addedNodes = applied.tasks[0].nodes.filter((node) => ["第一步", "第二步"].includes(node.title));
+    expect(addedNodes).toHaveLength(2);
+    expect(new Set(addedNodes.map((node) => `${node.x}:${node.y}`)).size).toBe(2);
+  });
+
   it("refuses to apply when the board changed after the proposal was staged", async () => {
     const { boardStorage, executor, propose } = await setup();
     const current = await boardStorage.readBoard();
@@ -74,6 +109,21 @@ describe("board change executor", () => {
 
     await expect(executor.commit(proposalId, { accountId: "account-a" })).rejects.toMatchObject({ code: "BOARD_CHANGE_CONFLICT" });
     expect((await boardStorage.readBoard()).tasks[0].title).toBe("换目标了");
+  });
+
+  it("refuses to overwrite a conflicting change to the same field", async () => {
+    const { boardStorage, executor, propose } = await setup();
+    const current = await boardStorage.readBoard();
+    const task = current.tasks[0];
+    const proposalId = await propose({ operation: "task.rename", taskId: task.id, title: "考研数学" });
+
+    await boardStorage.writeBoard(normalizeBoard({
+      ...current,
+      tasks: [{ ...task, title: "考研发" }],
+    }));
+
+    await expect(executor.commit(proposalId, { accountId: "account-a" })).rejects.toMatchObject({ code: "BOARD_CHANGE_CONFLICT" });
+    expect((await boardStorage.readBoard()).tasks[0].title).toBe("考研发");
   });
 
   it("enforces account ownership and single decisions", async () => {

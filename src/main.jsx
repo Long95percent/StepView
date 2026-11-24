@@ -235,6 +235,7 @@ function App() {
   const [accounts, setAccounts] = React.useState([]);
   const canvasRef = React.useRef(null);
   const agentMessageListRef = React.useRef(null);
+  const lastAgentApprovalSignatureRef = React.useRef("");
 
   const diaryApi = React.useMemo(() => createAppDiaryApi(), []);
   // 喂给编辑器里的节点多选，以及日记列表里的"关联到哪个节点"小标签。
@@ -544,6 +545,25 @@ function App() {
     const messageList = agentMessageListRef.current;
     if (messageList) messageList.scrollTop = messageList.scrollHeight;
   }, [agentDrawerOpen, agentScopeId, visibleAgentTurns]);
+
+  React.useEffect(() => {
+    if (!agentDrawerOpen) {
+      lastAgentApprovalSignatureRef.current = "";
+      return;
+    }
+    const signature = `${agentScopeId}:${agentApprovals.map((approval) => approval.approvalId).join("|")}`;
+    if (!agentApprovals.length) {
+      lastAgentApprovalSignatureRef.current = "";
+      return;
+    }
+    if (signature === lastAgentApprovalSignatureRef.current) return;
+    lastAgentApprovalSignatureRef.current = signature;
+    const messageList = agentMessageListRef.current;
+    const approvals = messageList?.querySelector(".agentApprovals");
+    if (!messageList || !approvals) return;
+    const offset = approvals.getBoundingClientRect().top - messageList.getBoundingClientRect().top;
+    messageList.scrollTop += offset - 8;
+  }, [agentDrawerOpen, agentScopeId, agentApprovals]);
 
   React.useEffect(() => {
     const nextScopeId = sanitizeAgentScopeId(board, agentScopeId, board.agentMemory);
@@ -1607,34 +1627,6 @@ function App() {
                 ))}
               </select>
             </label>
-            {agentApprovals.length > 0 && (
-              <section className="agentApprovals" aria-label="待确认的 Agent 修改">
-                <header>
-                  <strong>待确认的修改</strong>
-                  <small>{agentApprovals.length} 项 · 确认前不会改动你的看板</small>
-                </header>
-                {agentApprovals.map((approval) => (
-                  <article key={approval.approvalId} className="agentApprovalCard">
-                    <div className="agentApprovalTitle">
-                      <strong>{approval.summary || approval.type}</strong>
-                      {approval.reason ? <small>理由：{approval.reason}</small> : null}
-                    </div>
-                    {approval.diff?.lines?.length ? (
-                      <ul className="agentApprovalDiff">
-                        {approval.diff.lines.map((line, index) => <li key={index}>{line}</li>)}
-                      </ul>
-                    ) : null}
-                    {approval.type === "board_change" ? (
-                      <p className="agentApprovalNote">原文件已自动备份，确认前不会写入。</p>
-                    ) : null}
-                    <div className="agentApprovalActions">
-                      <button type="button" className="primary" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "approved")}>保留</button>
-                      <button type="button" className="ghost" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "rejected")}>丢弃</button>
-                    </div>
-                  </article>
-                ))}
-              </section>
-            )}
             <div className="agentConversation">
               <header>
                 <strong>{agentSessionLabel}</strong>
@@ -1655,6 +1647,34 @@ function App() {
                   </div>
                 </article>
               ))}
+              {agentApprovals.length > 0 && (
+                <section className="agentApprovals" aria-label="待确认的 Agent 修改">
+                  <header>
+                    <strong>待确认的修改</strong>
+                    <small>{agentApprovals.length} 项 · 确认前不会改动你的看板</small>
+                  </header>
+                  {agentApprovals.map((approval) => (
+                    <article key={approval.approvalId} className="agentApprovalCard">
+                      <div className="agentApprovalTitle">
+                        <strong>{approval.summary || approval.type}</strong>
+                        {approval.reason ? <small>理由：{approval.reason}</small> : null}
+                      </div>
+                      {approval.diff?.lines?.length ? (
+                        <ul className="agentApprovalDiff">
+                          {approval.diff.lines.map((line, index) => <li key={index}>{line}</li>)}
+                        </ul>
+                      ) : null}
+                      {approval.type === "board_change" ? (
+                        <p className="agentApprovalNote">原文件已自动备份，确认前不会写入。</p>
+                      ) : null}
+                      <div className="agentApprovalActions">
+                        <button type="button" className="primary" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "approved")}>保留</button>
+                        <button type="button" className="ghost" disabled={approvalBusyId === approval.approvalId} onClick={() => decideAgentApproval(approval, "rejected")}>丢弃</button>
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              )}
               </div>
             </div>
             <form className="agentComposer" onSubmit={askAgent}>

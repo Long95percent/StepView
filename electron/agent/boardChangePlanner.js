@@ -23,6 +23,7 @@ export class BoardChangeError extends Error {
 }
 
 const MAX_TEXT_LENGTH = 200;
+const MAX_SEQUENCE_LENGTH = 24;
 
 function requireText(value, field, { operation, maxLength = MAX_TEXT_LENGTH } = {}) {
   if (typeof value !== "string" || !value.trim()) throw new BoardChangeError(`${field} must be a non-empty string.`, { code: "BOARD_CHANGE_MISSING_FIELD", operation });
@@ -69,6 +70,7 @@ export const BOARD_CHANGE_OPERATIONS = Object.freeze([
   "task.delete",
   "node.add_milestone",
   "node.add_plan",
+  "node.add_sequence",
   "node.update",
   "node.delete",
   "node.toggle_plan_complete",
@@ -135,6 +137,53 @@ const OPERATIONS = {
     return { board: replaceTask(board, task.id, nextTask), taskId: task.id, nodeId: added?.id || null, summary: `在「${task.title}」新增计划节点「${title}」` };
   },
 
+  "node.add_sequence": (board, input, now) => {
+    const task = requireTask(board, input.taskId, "node.add_sequence");
+    const sourceNodeId = requireText(input.sourceNodeId, "sourceNodeId", { operation: "node.add_sequence" });
+    if (!task.nodes.some((node) => node.id === sourceNodeId)) throw new BoardChangeError(`Unknown node: ${sourceNodeId}`, { code: "BOARD_CHANGE_UNKNOWN_NODE", operation: "node.add_sequence" });
+    if (!Array.isArray(input.nodes) || input.nodes.length < 2 || input.nodes.length > MAX_SEQUENCE_LENGTH) {
+      throw new BoardChangeError(`nodes must contain 2-${MAX_SEQUENCE_LENGTH} items.`, { code: "BOARD_CHANGE_INVALID_FIELD", operation: "node.add_sequence" });
+    }
+
+    let nextTask = task;
+    let previousNodeId = sourceNodeId;
+    const nodeIds = [];
+
+    for (let index = 0; index < input.nodes.length; index += 1) {
+      const item = input.nodes[index];
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new BoardChangeError("Each sequence node must be an object.", { code: "BOARD_CHANGE_INVALID_FIELD", operation: "node.add_sequence" });
+      }
+      const kind = item.kind || "plan-milestone";
+      if (!["milestone", "plan-milestone"].includes(kind)) {
+        throw new BoardChangeError("kind must be milestone or plan-milestone.", { code: "BOARD_CHANGE_INVALID_FIELD", operation: "node.add_sequence" });
+      }
+      const title = requireText(item.title, `nodes[${index}].title`, { operation: "node.add_sequence" });
+      const note = {
+        title,
+        detail: typeof item.detail === "string" ? item.detail.trim().slice(0, 1000) : "",
+        timestamp: requireTimestamp(item.timestamp || new Date(now.getTime() + index * 1000).toISOString(), "node.add_sequence"),
+        plannedFor: item.plannedFor,
+      };
+      const previousNodeIds = new Set(nextTask.nodes.map((node) => node.id));
+      nextTask = kind === "milestone"
+        ? addMilestoneAfter(nextTask, previousNodeId, note)
+        : addPlanMilestoneAfter(nextTask, previousNodeId, note);
+      const added = nextTask.nodes.find((node) => !previousNodeIds.has(node.id));
+      if (!added) throw new BoardChangeError("Failed to add a sequence node.", { code: "BOARD_CHANGE_INVALID_FIELD", operation: "node.add_sequence" });
+      previousNodeId = added.id;
+      nodeIds.push(added.id);
+    }
+
+    return {
+      board: replaceTask(board, task.id, nextTask),
+      taskId: task.id,
+      nodeId: nodeIds.at(-1) || null,
+      nodeIds,
+      summary: `在「${task.title}」新增连续节点 ${nodeIds.length} 个`,
+    };
+  },
+
   "node.update": (board, input) => {
     const { task, node } = requireNode(board, input.nodeId, "node.update");
     const nextNode = { ...node };
@@ -193,6 +242,11 @@ export function planBoardChange(board, input = {}, { now = new Date() } = {}) {
     operation,
     board: outcome.board,
     summary: outcome.summary,
-    affected: { taskId: outcome.taskId || null, nodeId: outcome.nodeId || null, stickerId: outcome.stickerId || null },
+    affected: {
+      taskId: outcome.taskId || null,
+      nodeId: outcome.nodeId || null,
+      nodeIds: Array.isArray(outcome.nodeIds) ? outcome.nodeIds : (outcome.nodeId ? [outcome.nodeId] : []),
+      stickerId: outcome.stickerId || null,
+    },
   };
 }

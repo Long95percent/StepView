@@ -18,6 +18,24 @@ const CHANGE_FIELDS = {
   emoji: { type: "string", maxLength: 16 },
   x: { type: "number" },
   y: { type: "number" },
+  nodes: {
+    type: "array",
+    minItems: 2,
+    maxItems: 24,
+    description: "Required for node.add_sequence: nodes in connected order.",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title"],
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        detail: { type: "string", maxLength: 1000 },
+        kind: { type: "string", enum: ["milestone", "plan-milestone"] },
+        plannedFor: { type: "string", maxLength: 40 },
+        timestamp: { type: "string", maxLength: 40 },
+      },
+    },
+  },
 };
 
 const NODE_DETAIL_LIMIT = 300;
@@ -135,7 +153,9 @@ export const boardTools = [
   defineTool({
     id: "board.propose_change",
     title: "Propose a board change",
-    description: "Propose one change to the user's board. This does NOT modify the board: it stages a reviewable change with a backup and a diff, and the user decides whether to keep it.",
+    description:
+      "Propose one change to the user's board. This does NOT modify the board: it stages a reviewable change with a backup and a diff, and the user decides whether to keep it. "
+      + "When adding two or more connected nodes, use operation node.add_sequence with a nodes array in order; do not submit repeated independent node.add_plan/node.add_milestone proposals from the same source node.",
     category: "board",
     risk: "propose",
     mutatesBoard: false,

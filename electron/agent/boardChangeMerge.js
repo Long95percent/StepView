@@ -213,10 +213,22 @@ function placeAddedNodesWithoutOverlap(base, merged, proposed) {
   };
 }
 
+function pruneDanglingEdges(board) {
+  return {
+    ...board,
+    tasks: board.tasks.map((task) => {
+      const nodeIds = new Set((task.nodes || []).map((node) => node.id));
+      const edges = Array.isArray(task.edges) ? task.edges : [];
+      const nextEdges = edges.filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to));
+      return nextEdges.length === edges.length ? task : { ...task, edges: nextEdges };
+    }),
+  };
+}
+
 export function rebaseBoardChange(baseBoard, currentBoard, proposedBoard) {
   const base = normalizeBoard(baseBoard);
   const current = normalizeBoard(currentBoard);
   const proposed = normalizeBoard(proposedBoard);
   const merged = normalizeBoard(mergeValue(base, current, proposed, "board"));
-  return normalizeBoard(placeAddedNodesWithoutOverlap(base, merged, proposed));
+  return normalizeBoard(pruneDanglingEdges(placeAddedNodesWithoutOverlap(base, merged, proposed)));
 }

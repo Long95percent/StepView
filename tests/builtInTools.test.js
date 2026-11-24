@@ -104,6 +104,31 @@ describe("built-in tools", () => {
     expect(staged.after.tasks[0].nodes).toHaveLength(3);
   });
 
+  it("stages a connected node sequence as one reviewable proposal", async () => {
+    const registry = makeRegistry();
+    const runtime = createToolRuntime({ registry });
+    const context = await makeBoardContext();
+    const task = (await context.boardStorage.readBoard()).tasks[0];
+
+    const { result } = await runtime.run("board.propose_change", {
+      operation: "node.add_sequence",
+      reason: "把计划拆成连续步骤",
+      taskId: task.id,
+      sourceNodeId: task.nodes[0].id,
+      nodes: [{ title: "第一步" }, { title: "第二步" }, { title: "第三步" }],
+    }, context);
+
+    expect(result).toMatchObject({ type: "board_change", operation: "node.add_sequence", requiresApproval: true });
+    expect(result.affected.nodeIds).toHaveLength(3);
+    const pending = await context.boardChangeStore.list({ status: "pending" });
+    expect(pending).toHaveLength(1);
+    const staged = await context.boardChangeStore.get(result.proposalId);
+    const addedNodes = staged.after.tasks[0].nodes.filter((node) => result.affected.nodeIds.includes(node.id));
+    const edges = new Set(staged.after.tasks[0].edges.map((edge) => `${edge.from}->${edge.to}`));
+    expect(edges).toContain(`${addedNodes[0].id}->${addedNodes[1].id}`);
+    expect(edges).toContain(`${addedNodes[1].id}->${addedNodes[2].id}`);
+  });
+
   it("rejects unsupported operations and no-op changes", async () => {
     const registry = makeRegistry();
     const runtime = createToolRuntime({ registry });

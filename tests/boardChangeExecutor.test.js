@@ -126,6 +126,39 @@ describe("board change executor", () => {
     expect((await boardStorage.readBoard()).tasks[0].title).toBe("考研发");
   });
 
+  it("removes dangling edges when rebasing onto a board with a replaced finish node", async () => {
+    const { boardStorage, executor, propose } = await setup();
+    const current = await boardStorage.readBoard();
+    const task = current.tasks[0];
+    const proposalId = await propose({ operation: "node.add_milestone", taskId: task.id, sourceNodeId: task.nodes[0].id, title: "新增步骤" });
+
+    const finish = task.nodes.find((node) => node.kind === "finish");
+    const nextFinishId = "node-current-finish";
+    const start = task.nodes.find((node) => node.kind === "start");
+    const baseFinishEdge = task.edges.find((edge) => edge.from === start.id && edge.to === finish.id);
+    await boardStorage.writeBoard(normalizeBoard({
+      ...current,
+      tasks: current.tasks.map((candidate) => candidate.id === task.id ? {
+        ...candidate,
+        nodes: candidate.nodes.map((node) => node.id === finish.id ? { ...node, id: nextFinishId } : node),
+        edges: candidate.edges
+          .filter((edge) => edge.id !== baseFinishEdge.id)
+          .concat({ id: "edge-current-finish", from: start.id, to: nextFinishId }),
+      } : candidate),
+    }));
+
+    await executor.commit(proposalId, { accountId: "account-a" });
+
+    const applied = await boardStorage.readBoard();
+    const appliedTask = applied.tasks[0];
+    const nodeIds = new Set(appliedTask.nodes.map((node) => node.id));
+    expect(nodeIds.has(nextFinishId)).toBe(true);
+    for (const edge of appliedTask.edges) {
+      expect(nodeIds.has(edge.from)).toBe(true);
+      expect(nodeIds.has(edge.to)).toBe(true);
+    }
+  });
+
   it("enforces account ownership and single decisions", async () => {
     const { boardStorage, executor, propose } = await setup();
     const task = (await boardStorage.readBoard()).tasks[0];

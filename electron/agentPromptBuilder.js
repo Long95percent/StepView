@@ -49,6 +49,7 @@ export function buildAgentPrompt({
     "不要编造不存在的任务、支线、日记或心理结论。",
     "心理需求分析只能作为动机和行为模式推测，不能做医学诊断。",
     "默认给陪伴式、结构化、低压力的下一步建议。",
+    "需要新增两个以上连续节点时，必须使用 board.propose_change 的 node.add_sequence 操作，一次提交整条顺序；不要对同一个 sourceNodeId 连续提交多个独立的 node.add_plan 或 node.add_milestone 提案。",
     "",
     "## Fixed Layer",
     `Session: ${session.sessionId}`,

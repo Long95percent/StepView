@@ -508,6 +508,7 @@ flowchart LR
 ```
 
 - 支持的操作是受控枚举（`task.*` / `node.*` / `sticker.*`），全部复用 `src/progressCore.js` 的既有函数，保证 Agent 写入与 UI 写入的结构完全一致。
+- 连续新增多个节点必须使用 `node.add_sequence`，一次生成 `source -> 步骤 1 -> 步骤 2 -> ... -> 后续节点` 的完整链路；重基后会清理指向已不存在节点的悬空连线。
 - 提案存在账号库的 `approvals` / `snapshots` 表里，内含原始 Board 备份、候选 Board、`baseHash` 和 diff。以前是一个提案一个 JSON 文件、列个表要扫目录，现在一次查询就够。
 - 审批通过时 `boardChangeExecutor` 会重新读取当前 Board 并比对 `baseHash`。不一致时以提案的 `before` / `after` 和当前 Board 做三方合并：无关改动会自动保留，同一字段的不同修改才会报 `BOARD_CHANGE_CONFLICT`，不会覆盖用户的新数据。
 - 落盘前的快照写进 `snapshots` 表；画布镜像 `stepview-board.json` 由数据库层维护，`boardStorage` 自身滚动更新镜像的上一版。

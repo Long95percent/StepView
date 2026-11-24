@@ -77,6 +77,7 @@ describe("agent service", () => {
     });
     expect(prepared.prompt.systemPrompt).toContain(`Session: task:${task.id}`);
     expect(prepared.prompt.systemPrompt).toContain("launch product");
+    expect(prepared.prompt.systemPrompt).toContain("node.add_sequence");
     expect(prepared.prompt.promptState).toMatchObject({
       sessionId: `task:${task.id}`,
       taskLineId: task.id,

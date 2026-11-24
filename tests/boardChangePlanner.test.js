@@ -39,6 +39,39 @@ describe("board change planner", () => {
     expect(added).toMatchObject({ kind: "plan-milestone", status: "planned" });
   });
 
+  it("adds a connected node sequence in one operation", () => {
+    const board = makeBoard();
+    const task = board.tasks[0];
+    const startId = task.nodes[0].id;
+    const finishId = task.nodes[1].id;
+
+    const result = planBoardChange(board, {
+      operation: "node.add_sequence",
+      taskId: task.id,
+      sourceNodeId: startId,
+      nodes: [
+        { title: "第一步", plannedFor: "2026-05-20" },
+        { title: "第二步", detail: "连续执行" },
+        { title: "第三步", kind: "milestone" },
+      ],
+    }, { now: NOW });
+
+    expect(result.summary).toBe("在「考研」新增连续节点 3 个");
+    expect(result.affected.nodeIds).toHaveLength(3);
+    expect(result.board.tasks[0].nodes).toHaveLength(task.nodes.length + 3);
+    const addedNodes = result.affected.nodeIds.map((id) => result.board.tasks[0].nodes.find((node) => node.id === id));
+    expect(addedNodes.map((node) => node.title)).toEqual(["第一步", "第二步", "第三步"]);
+    expect(addedNodes.map((node) => node.kind)).toEqual(["plan-milestone", "plan-milestone", "milestone"]);
+    expect(addedNodes[0].x).toBeLessThan(addedNodes[1].x);
+    expect(addedNodes[1].x).toBeLessThan(addedNodes[2].x);
+
+    const edges = new Set(result.board.tasks[0].edges.map((edge) => `${edge.from}->${edge.to}`));
+    expect(edges).toContain(`${startId}->${addedNodes[0].id}`);
+    expect(edges).toContain(`${addedNodes[0].id}->${addedNodes[1].id}`);
+    expect(edges).toContain(`${addedNodes[1].id}->${addedNodes[2].id}`);
+    expect(edges).toContain(`${addedNodes[2].id}->${finishId}`);
+  });
+
   it("keeps the finish node title in sync when renaming a task line", () => {
     const board = makeBoard();
     const result = planBoardChange(board, { operation: "task.rename", taskId: board.tasks[0].id, title: "考研数学" });
@@ -92,7 +125,7 @@ describe("board change planner", () => {
 
   it("exposes a stable operation list", () => {
     expect(listBoardChangeOperations()).toEqual([...BOARD_CHANGE_OPERATIONS]);
-    expect(BOARD_CHANGE_OPERATIONS).toEqual(expect.arrayContaining(["task.create", "node.add_milestone", "node.add_plan", "sticker.add", "sticker.remove"]));
+    expect(BOARD_CHANGE_OPERATIONS).toEqual(expect.arrayContaining(["task.create", "node.add_milestone", "node.add_plan", "node.add_sequence", "sticker.add", "sticker.remove"]));
     expect(BOARD_CHANGE_OPERATIONS).toHaveLength(new Set(BOARD_CHANGE_OPERATIONS).size);
   });
 });
